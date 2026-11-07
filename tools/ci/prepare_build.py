@@ -1,7 +1,6 @@
 """Provision the pinned Windows CI toolchain; private signing data never enters Git."""
 import base64
 import hashlib
-import json
 import os
 from pathlib import Path
 import re
@@ -17,7 +16,7 @@ DOWNLOADS = {
     f"Godot_v{VERSION}-stable_win64.exe.zip": "731980f9608d61333e5baf54a2ef17210acc7a538446c0cb9969f002aca1e953",
     f"Godot_v{VERSION}-stable_export_templates.tpz": "f298490b8d44d934be425a5a65a51bf15f422428b229a06a6e11d9ffea248011",
 }
-TAG_PATTERN = r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+TAG_PATTERN = r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*))?"
 
 
 def sha256(path):

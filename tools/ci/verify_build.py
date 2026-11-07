@@ -10,6 +10,8 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / "exports/release"
 FILES = ("MoonExcavation-Windows-x64.zip", "MoonExcavation-Android.apk")
+# Public certificate fingerprint of the first published demo. The private key is a Secret.
+EXPECTED_SIGNER = "56889b57ae32a6ee6e30f814f0df7d599c5db7ccff50692aee26bfef8c8a6544"
 
 
 def main():
@@ -43,6 +45,8 @@ def main():
     match = re.search(r"Signer #1 certificate SHA-256 digest: ([0-9a-f]+)", signer)
     if not match:
         raise RuntimeError("APK signer verification did not return a certificate")
+    if match[1] != EXPECTED_SIGNER:
+        raise RuntimeError("APK signing identity changed; cannot safely update the existing demo")
     badging = subprocess.check_output([str(build_tools / "aapt.exe"), "dump", "badging", str(apk)], text=True, encoding="utf-8")
     version = os.environ["BUILD_TAG"][1:]
     code = int(os.environ["GITHUB_RUN_NUMBER"]) + 1
