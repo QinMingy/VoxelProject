@@ -10,6 +10,21 @@
 
 两端使用同一套玩法和存档规则，但各自保存进度，不会自动同步。
 
+自动发版已配置在 `.github/workflows/release.yml`。在这个独立 Godot 仓库内提交并推送修改，再执行下面两条命令；每次使用新的版本号：
+
+```sh
+git tag v0.1.2-demo
+git push origin v0.1.2-demo
+```
+
+GitHub Actions 会下载并校验固定版本的 Godot 4.7.2 和模板，运行体素、背包、养成、雷达、触控和音效检查，然后导出 Windows ZIP、Android APK。两个包通过 CRC、Android 签名、版本与内容检查后，才会创建并公开对应 Release，附带 `SHA256SUMS.txt` 和 `build-info.json`。构建失败不会公开新 Release；可到 [Actions](https://github.com/QinMingy/VoxelProject/actions/workflows/release.yml) 查看日志并重跑失败任务。
+
+标签格式为 `v主版本.次版本.修订号`，可附加 `-demo`、`-beta.1` 等后缀；带后缀会标为预发布。Android 版本名取标签去掉开头的 `v`，版本代码取该工作流运行编号加一（原始手动包为 1）；重跑同一次任务保持版本代码。保持此工作流文件与编号连续，并按发布顺序使用递增版本。已公开的相同标签附件不会被自动覆盖。
+
+APK 沿用首次试玩包的调试签名，密钥保存在仓库 Actions Secret `ANDROID_DEBUG_KEYSTORE_BASE64`，仅在构建临时还原并清理。新建仓库或复制工程时，需要在 Settings → Secrets and variables → Actions 配置同名 Secret，内容为同一份调试 keystore 的 Base64；不要把密钥提交进源码。当前自动产物仍是调试签名试玩 APK，尚未完成 Android 真机验证。
+
+不发版只验证打包时，可在 Actions → Build and Release → Run workflow 手动运行；包和日志保存在对应运行页的 Artifacts。手动运行不会公开 Release。标签必须指向含有此工作流的提交；旧标签不会自动补跑。
+
 自行导出需要安装与引擎版本一致的 **Godot 4.7.2 导出模板**。Android 另需 **JDK 17、Android SDK（含平台工具与构建工具）和本机调试 keystore**；这些工具、模板与签名文件均不随源码提交。仅在 Godot 编辑器中试玩不需要 Android 工具链。
 
 当前导出预设的自定义模板与调试签名路径沿用 `.build/tools/` 本地打包目录。若通过 Godot 导出界面手动构建，请清空各预设的 `custom_template/debug` 和 `custom_template/release`，使用已安装的对应版本模板；在编辑器设置中配置自己的 JDK／Android SDK，并将 Android 调试 keystore、别名和密码配置为本机值。`tools/package_demo.ps1` 按脚本中的 `.build/tools/` 目录约定查找依赖，不会自动下载；运行时通过 `-GodotPath` 指定自己的 Godot 可执行文件。签名文件与个人配置应留在本机。

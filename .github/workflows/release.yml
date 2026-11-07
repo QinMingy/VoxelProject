@@ -1,0 +1,131 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Manual runs only build downloadable Actions artifacts; they never publish.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Test and export Windows + Android
+    runs-on: windows-2022
+    timeout-minutes: 30
+    env:
+      BUILD_TAG: ${{ github.ref_type == 'tag' && github.ref_name || 'v0.0.0-ci' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Android build tools
+        shell: pwsh
+        run: |
+          & "$env:ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager.bat" 'platform-tools' 'build-tools;35.0.1' 'platforms;android-35'
+          if ($LASTEXITCODE -ne 0) { throw 'Android SDK setup failed' }
+
+      - name: Prepare pinned Godot and signing key
+        id: toolchain
+        env:
+          ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+        run: python tools/ci/prepare_build.py
+
+      - name: Import resources and run gameplay checks
+        shell: pwsh
+        env:
+          GODOT: ${{ steps.toolchain.outputs.godot }}
+        run: |
+          & $env:GODOT --headless --path . --import
+          if ($LASTEXITCODE -ne 0) { throw 'Godot import failed' }
+          $checks = @{
+            'shared_voxel_smoke' = 'SHARED_VOXEL_OK'
+            'inventory_model_smoke' = 'INVENTORY_OK'
+            'progression_smoke' = 'PROGRESSION_OK'
+            'detector_multi_smoke' = 'DETECTOR_MULTI_OK'
+            'touch_controls_smoke' = 'TOUCH_CONTROLS_OK'
+            'touch_game_smoke' = 'TOUCH_GAME_OK'
+            'audio_smoke' = 'AUDIO_OK'
+          }
+          New-Item -ItemType Directory -Force .build/test-logs | Out-Null
+          foreach ($check in $checks.GetEnumerator()) {
+            $result = & $env:GODOT --headless --path . --script "tests/$($check.Key).gd" 2>&1
+            $code = $LASTEXITCODE
+            $result | Tee-Object -FilePath ".build/test-logs/$($check.Key).log"
+            if ($code -ne 0 -or ($result -join "`n") -notmatch $check.Value) { throw "Failed: $($check.Key)" }
+          }
+
+      - name: Export both platforms
+        shell: pwsh
+        env:
+          GODOT: ${{ steps.toolchain.outputs.godot }}
+        run: ./tools/package_demo.ps1 -GodotPath $env:GODOT
+
+      - name: Verify packages and record build metadata
+        run: python tools/ci/verify_build.py
+
+      - name: Remove temporary signing key
+        if: always()
+        shell: pwsh
+        run: Remove-Item -LiteralPath .build/tools/debug.keystore -Force -ErrorAction SilentlyContinue
+
+      - name: Save verified packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: moon-excavation-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          path: |
+            exports/release/MoonExcavation-Windows-x64.zip
+            exports/release/MoonExcavation-Android.apk
+            exports/release/SHA256SUMS.txt
+            exports/release/build-info.json
+
+      - name: Save diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-logs-${{ github.run_id }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            .build/test-logs/*.log
+            .build/export-logs/*.log
+
+  publish:
+    name: Publish verified release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: moon-excavation-${{ github.run_id }}
+          path: release-assets
+      - name: Upload attachments and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/ci/publish_release.py release-assets
