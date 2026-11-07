@@ -1,0 +1,11 @@
+.godot/
+.demo-data/
+.build/
+exports/
+*.keystore
+*.jks
+*.p12
+.env
+.env.*
+*.log
+__pycache__/
