@@ -32,7 +32,8 @@ func run() -> void:
 	var panel := RadarPanel.new()
 	root.add_child(panel)
 	require(not panel.visible and panel.mouse_filter == Control.MOUSE_FILTER_IGNORE, "HUD starts hidden and ignores mouse")
-	require(panel.display_mode == RadarPanel.Mode.COMPASS, "compass strip is the default mode")
+	require(panel.display_mode == RadarPanel.Mode.CIRCLE, "circular radar is the default mode")
+	panel.set_display_mode(RadarPanel.Mode.COMPASS)
 	var front := make_crystal(Vector3(0, 0, -3))
 	var distant := make_crystal(Vector3(0, 0, -8))
 	var right := make_crystal(Vector3(5, 0, 0))
@@ -102,6 +103,29 @@ func run() -> void:
 	require(marker(circles, front).position.y < center.y and marker(circles, back).position.y > center.y, "circular radar includes front and rear objects")
 	require(marker(circles, front).position.distance_to(center) < marker(circles, distant).position.distance_to(center), "circle radial distance reflects physical horizontal proximity")
 	require(marker(circles, front).radius > marker(circles, distant).radius and marker(circles, front).alpha > marker(circles, distant).alpha, "circle uses larger and brighter nearby markers")
+	# An underground item at the player's X/Z must reach the arrow exactly.
+	# Physical 3D distance still controls detection and visual prominence.
+	var beneath := make_crystal(Vector3(0, -2, 0))
+	var too_deep := make_crystal(Vector3(0, -10.01, 0))
+	panel.set_reading(Detector.sample(Vector3.ZERO, Vector3.FORWARD, [beneath, too_deep], null, 0))
+	var centred: Array = panel.marker_layout()
+	require(centred.size() == 1 and int(centred[0].id) == beneath.get_instance_id(), "an item beneath the player is detected but an out-of-range deep item is excluded")
+	require(marker(centred, beneath).position.is_equal_approx(center) and panel.target_offset().is_zero_approx(), "same X/Z aligns the echo with the player arrow without a radial dead zone")
+	var previous_radius := -1.0
+	for horizontal_distance: float in [0.0, 0.02, 0.2, 1.0, 4.0]:
+		beneath.position = Vector3(horizontal_distance, -2, 0)
+		panel.set_reading(Detector.sample(Vector3.ZERO, Vector3.FORWARD, [beneath], null, 0))
+		var point: Vector2 = marker(panel.marker_layout(), beneath).position
+		var radius := point.distance_to(center)
+		require(is_equal_approx(radius, 54.0 * horizontal_distance / 10.0), "radial displacement is proportional to real horizontal distance down to zero")
+		require(radius > previous_radius, "approaching or leaving the centre changes marker position smoothly")
+		previous_radius = radius
+	beneath.position = Vector3(1, -2, 0)
+	var lower := make_crystal(Vector3(1, -8, 0))
+	panel.set_reading(Detector.sample(Vector3.ZERO, Vector3.FORWARD, [beneath, lower], null, 0))
+	var same_horizontal: Array = panel.marker_layout()
+	require(marker(same_horizontal, beneath).position.is_equal_approx(marker(same_horizontal, lower).position), "burial depth does not invent horizontal separation")
+	require(marker(same_horizontal, beneath).radius > marker(same_horizontal, lower).radius, "different depths retain their true 3D-distance marker sizes")
 	front.collected = true
 	panel.set_reading(Detector.sample(Vector3.ZERO, Vector3.FORWARD, items, null, 0))
 	require(panel.marker_layout().size() == 4, "collecting one object removes exactly its marker")
@@ -117,9 +141,9 @@ func run() -> void:
 	for mode in [RadarPanel.Mode.CIRCLE, RadarPanel.Mode.COMPASS]:
 		panel.set_display_mode(mode)
 		panel.set_reading(Detector.sample(Vector3.ZERO, Vector3.FORWARD, [], null, 0))
-		require(panel.marker_layout().is_empty() and panel._echo_label.text == "无晶石", "empty readings clear stale markers and text in both modes")
+		require(panel.marker_layout().is_empty() and panel._echo_label.text == "无目标", "empty readings clear stale markers and text in both modes")
 	panel.set_reading(reading)
 	panel.set_enabled(false)
 	require(not panel.visible and not panel.is_processing(), "disabled HUD remains hidden and stops processing")
-	print("DETECTOR_MULTI_OK modes=true all_targets=true compass_signs_northwrap=true near_size_alpha=true aggregation_preserves_bearing=true circle_front_back=true empty=true paused=true")
+	print("DETECTOR_MULTI_OK default_circle=true modes=true all_targets=true compass_signs_northwrap=true near_size_alpha=true aggregation_preserves_bearing=true circle_front_back=true exact_centre_overlap=true no_radial_deadzone=true depth_range=true empty=true paused=true")
 	quit(1 if failed else 0)

@@ -134,7 +134,8 @@ func run() -> void:
 	check(game.base_open and paused, "base menu opens and pauses")
 	key(KEY_V)
 	assert_view(true)
-	game.base_panel.close()
+	game.start_trip(false)
+	check(game.on_moon and not game.base_open and not paused and game.trip_id > 0, "real departure closes the lobby and creates a valid settlement ledger")
 	game.gm_panel.open()
 	check(game.gm_open and paused, "debug menu opens and pauses")
 	key(KEY_V)
@@ -148,7 +149,6 @@ func run() -> void:
 	key(KEY_V)
 	assert_view(false)
 
-	game.on_moon = true
 	game.terrain.set_oxygen_supply_density(0.25)
 	game.terrain.reset_terrain(SEED)
 	game.terrain.set_fragment_cleanup(false, 9)
@@ -214,5 +214,11 @@ func run() -> void:
 	check(int(report.oxygen_grains) == collected and is_equal_approx(float(report.oxygen_recovered), recovered),
 		"settlement includes actual pickup, excluding airborne grains")
 	check(game.gain_oxygen(20) == 0.0, "base cannot use a moon pickup")
+	check(game.progression.museum_state.warehouse.is_empty() and game.progression.museum_state.exhibits.is_empty(), "oxygen-only excursion creates neither persistent cargo nor fabricated exhibits")
+	game.sfx.set_muted(true)
+	await create_timer(0.10, true).timeout
+	game.queue_free()
+	await process_frame
+	await create_timer(0.25, true).timeout
 	print("FIRST_PERSON_OXYGEN_OK cameras=true reticle_voxels=true help=true menus=true real_ore=%d cap=true settlement=true preview=%s" % [found, preview])
 	quit()

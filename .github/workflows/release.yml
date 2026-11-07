@@ -58,10 +58,22 @@ jobs:
             'shared_voxel_smoke' = 'SHARED_VOXEL_OK'
             'inventory_model_smoke' = 'INVENTORY_OK'
             'progression_smoke' = 'PROGRESSION_OK'
+            'museum_model_smoke' = 'MUSEUM_MODEL_OK'
+            'museum_ui_smoke' = 'MUSEUM_UI_OK'
+            'museum_integration_smoke' = 'MUSEUM_INTEGRATION_OK'
+            'skill_tree_smoke' = 'SKILL_TREE_OK'
+            'excavation_range_smoke' = 'EXCAVATION_RANGE_OK'
+            'mining_upgrade_smoke' = 'MINING_UPGRADE_OK'
+            'economy_balance_report' = 'ECONOMY_BALANCE_OK'
+            'base_progression_integration' = 'BASE_PROGRESSION_INTEGRATION_OK'
             'detector_multi_smoke' = 'DETECTOR_MULTI_OK'
             'touch_controls_smoke' = 'TOUCH_CONTROLS_OK'
             'touch_game_smoke' = 'TOUCH_GAME_OK'
             'audio_smoke' = 'AUDIO_OK'
+            'voxel_model_smoke' = 'VOXEL_MODEL_OK'
+            'voxel_prop_assets_smoke' = 'VOXEL_PROP_ASSETS_OK'
+            'orthogonal_voxel_smoke' = 'ORTHOGONAL_VOXEL_OK'
+            'adventure_loot_smoke' = 'ADVENTURE_LOOT_OK'
           }
           New-Item -ItemType Directory -Force .build/test-logs | Out-Null
           foreach ($check in $checks.GetEnumerator()) {

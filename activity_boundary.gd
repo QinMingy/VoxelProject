@@ -1,6 +1,7 @@
 extends Node3D
 
 const RADIUS := 26.0
+const MIN_RADIUS := 14.0
 const WARNING_DISTANCE := 6.0
 const PLAYER_MARGIN := 0.35
 const SEGMENTS := 128
@@ -37,6 +38,7 @@ void fragment() {
 """
 
 var warning_strength := 0.0
+var radius := RADIUS
 var _player_position := Vector3.ZERO
 var _wall: MeshInstance3D
 var _material := ShaderMaterial.new()
@@ -55,14 +57,23 @@ func _ready() -> void:
 
 func clamp_position(point: Vector3) -> Vector3:
 	var horizontal := Vector2(point.x, point.z)
-	var limit := RADIUS - PLAYER_MARGIN
+	var limit := radius - PLAYER_MARGIN
 	if horizontal.length_squared() <= limit * limit:
 		return point
 	horizontal = horizontal.normalized() * limit
 	return Vector3(horizontal.x, point.y, horizontal.y)
 
 func edge_distance(point: Vector3) -> float:
-	return RADIUS - Vector2(point.x, point.z).length()
+	return radius - Vector2(point.x, point.z).length()
+
+func set_radius(value: float) -> void:
+	var next_radius := clampf(value, MIN_RADIUS, RADIUS) if is_finite(value) else RADIUS
+	if is_equal_approx(radius, next_radius):
+		return
+	radius = next_radius
+	if is_instance_valid(_wall):
+		_wall.mesh = _build_wall()
+	update_player(_player_position)
 
 func update_player(point: Vector3) -> void:
 	_player_position = point
@@ -80,15 +91,15 @@ func _build_wall() -> ArrayMesh:
 	for index in range(SEGMENTS):
 		var first_angle := TAU * float(index) / SEGMENTS
 		var second_angle := TAU * float(index + 1) / SEGMENTS
-		var first := Vector2(cos(first_angle), sin(first_angle)) * RADIUS
-		var second := Vector2(cos(second_angle), sin(second_angle)) * RADIUS
+		var first := Vector2(cos(first_angle), sin(first_angle)) * radius
+		var second := Vector2(cos(second_angle), sin(second_angle)) * radius
 		var corners := [
 			Vector3(first.x, BOTTOM, first.y), Vector3(second.x, BOTTOM, second.y),
 			Vector3(second.x, TOP, second.y), Vector3(first.x, TOP, first.y),
 		]
 		var uv := [
-			Vector2(first_angle * RADIUS, BOTTOM), Vector2(second_angle * RADIUS, BOTTOM),
-			Vector2(second_angle * RADIUS, TOP), Vector2(first_angle * RADIUS, TOP),
+			Vector2(first_angle * radius, BOTTOM), Vector2(second_angle * radius, BOTTOM),
+			Vector2(second_angle * radius, TOP), Vector2(first_angle * radius, TOP),
 		]
 		var normal := Vector3(first.x + second.x, 0.0, first.y + second.y).normalized()
 		for vertex_index in [0, 1, 2, 0, 2, 3]:

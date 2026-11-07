@@ -164,8 +164,16 @@ func run() -> void:
 	require(game.gain_oxygen(7) > 0.0 and game.oxygen_grains == 7, "oxygen gains are tracked outside the backpack")
 	var bank_before: int = game.bank
 	game.settle(false)
-	require(game.bank == bank_before + expected_sale, "settlement sums independent crystal prices and excludes the dropped specimen and oxygen")
-	require(game.delivered_clusters == expected_count and game.appraisal.known, "all sold items are counted and first sale identifies the type")
+	require(game.bank == bank_before and game.progression.museum_state.warehouse.size() == expected_count, "safe return stores each collected crystal and excludes the dropped specimen and oxygen from cargo")
+	var warehouse_value := 0
+	for stored: Dictionary in game.progression.museum_state.warehouse:
+		warehouse_value += value_of(stored)
+		require(not stored.has("world_id") and not stored.has("pos") and not stored.has("rotated"), "persistent cargo strips transient world IDs and backpack placement")
+	require(warehouse_value == expected_sale and game.delivered_clusters == expected_count and not game.appraisal.known, "warehouse preserves immutable mixed-size prices without identifying unprocessed cargo")
+	var stored_cargo: Array = game.progression.museum_state.warehouse.duplicate(true)
+	for stored: Dictionary in stored_cargo:
+		game.on_museum_sell(int(stored.uid))
+	require(game.bank == bank_before + expected_sale and game.appraisal.known and game.progression.museum_state.warehouse.is_empty(), "explicit sales sum independent crystal prices and identify the type exactly once")
 	require(game.inventory.items.is_empty() and game.carried_crystals.is_empty(), "safe settlement clears inventory and carried instances")
 	game.start_trip(false)
 	game.terrain.reset_terrain(88273)
@@ -182,7 +190,10 @@ func run() -> void:
 	require(game.bank == bank_before and game.delivered_clusters == expected_count, "rescue pays nothing and sells none of the mixed-size crystals")
 	require(game.inventory.items.is_empty() and game.carried_crystals.is_empty() and game.packed_specimens.is_empty(), "rescue clears all inventory representations")
 	require(not game.appraisal.known, "rescue never identifies an unsold specimen")
+	game.sfx.set_muted(true)
+	await create_timer(0.10, true).timeout
 	game.queue_free()
 	await process_frame
+	await create_timer(0.25, true).timeout
 	print("BACKPACK_INTEGRATION_OK real_excavation=true full=16 pause=true drop_repick=true rotated_swap=true pending_identity=true mixed_size_sale=%d rescue=0" % expected_sale)
 	quit(1 if test_failed else 0)

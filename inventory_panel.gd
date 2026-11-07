@@ -17,6 +17,7 @@ class InventoryGrid extends Control:
 	var preview_rotated := false
 	var hover_cell := Vector2i(-1, -1)
 	var known := false
+	var catalogue_query: Callable
 
 	func fit_dimensions(columns: int, rows: int) -> void:
 		cell_size = minf(CELL, minf(365.0 / maxi(1, columns), 320.0 / maxi(1, rows)))
@@ -55,12 +56,10 @@ class InventoryGrid extends Control:
 			draw_style_box(_tile_style(color, border, line_width), rect)
 			# The silhouette and price stay readable even in a 64 px one-cell item.
 			# Wear, name and footprint belong to the selected item's detail panel.
-			var radius := minf(17.0, rect.size.x * 0.17)
+			var radius := minf(17.0, rect.size.x * 0.20)
 			var center := rect.position + Vector2(rect.size.x * 0.5, rect.size.y * 0.36)
-			var gem := PackedVector2Array([center + Vector2(0, -radius), center + Vector2(radius * 0.72, -radius * 0.15), center + Vector2(radius * 0.52, radius * 0.65), center + Vector2(0, radius), center + Vector2(-radius * 0.72, radius * 0.15), center + Vector2(-radius * 0.52, -radius * 0.65)])
-			draw_colored_polygon(gem, UI.ACCENT if selected else Color("#8cabc5"))
-			draw_line(center + Vector2(0, -radius), center + Vector2(-radius * 0.2, radius * 0.25), Color("#d5fff1"), 1.5, true)
-			var price := str(roundi(float(item.base_value) * (100 - int(item.wear)) / 100.0)) if known else "?"
+			_draw_item_icon(item, center, radius)
+			var price := str(roundi(float(item.get("base_value", 0)) * (100 - int(item.get("wear", 0))) / 100.0)) if _item_known(item) else "?"
 			draw_string(font, rect.position + Vector2(3, rect.size.y - 7), price, HORIZONTAL_ALIGNMENT_CENTER, rect.size.x - 6, 20, UI.TEXT)
 		if selected_id >= 0 and hover_cell.x >= 0 and hover_cell.y >= 0:
 			var selected: Dictionary = inventory.get_item(selected_id)
@@ -70,6 +69,55 @@ class InventoryGrid extends Control:
 				var rect := Rect2(Vector2(hover_cell) * cell_size + Vector2(2, 2), Vector2(Inventory.footprint(selected, preview_rotated)) * cell_size - Vector2(4, 4))
 				draw_rect(rect, tint)
 				draw_rect(rect, Color("#80f2b9") if valid else Color("#ff7483"), false, 3.0)
+
+	func _item_known(item: Dictionary) -> bool:
+		var type_id := str(item.get("item_type", "crystal"))
+		if catalogue_query.is_valid():
+			return bool(catalogue_query.call(type_id))
+		# The old boolean API only identified crystal; it must not reveal new loot.
+		return known and type_id in ["crystal", "moon_crystal_cluster"]
+
+	func _draw_item_icon(item: Dictionary, center: Vector2, radius: float) -> void:
+		var type_id := str(item.get("item_type", "crystal"))
+		var fallback := Color("#8cabc5")
+		match type_id:
+			"chest": fallback = Color("#d4a254")
+			"shield": fallback = Color("#719de0")
+			"hammer": fallback = Color("#a9b8c6")
+			"book": fallback = Color("#cd7b75")
+			"potion": fallback = Color("#c485d9")
+		var supplied: Variant = item.get("icon_color", fallback)
+		var color: Color = supplied if supplied is Color else Color.from_string(str(supplied), fallback)
+		var highlight := color.lightened(0.4)
+		match type_id:
+			"chest":
+				draw_rect(Rect2(center + Vector2(-radius, -radius * 0.45), Vector2(radius * 2, radius * 1.25)), color)
+				var lid := PackedVector2Array([center + Vector2(-radius, -radius * 0.45), center + Vector2(-radius * 0.8, -radius * 0.9), center + Vector2(radius * 0.8, -radius * 0.9), center + Vector2(radius, -radius * 0.45)])
+				draw_colored_polygon(lid, color.lightened(0.2))
+				draw_line(center + Vector2(-radius, -radius * 0.25), center + Vector2(radius, -radius * 0.25), Color("#65502d"), 2.0, true)
+				draw_rect(Rect2(center + Vector2(-radius * 0.16, -radius * 0.4), Vector2(radius * 0.32, radius * 0.65)), Color("#ffe4a0"))
+			"shield":
+				var shield := PackedVector2Array([center + Vector2(-radius * 0.8, -radius * 0.85), center + Vector2(radius * 0.8, -radius * 0.85), center + Vector2(radius * 0.7, radius * 0.2), center + Vector2(0, radius), center + Vector2(-radius * 0.7, radius * 0.2)])
+				draw_colored_polygon(shield, color)
+				draw_line(center + Vector2(0, -radius * 0.6), center + Vector2(0, radius * 0.55), highlight, 3.0, true)
+				draw_line(center + Vector2(-radius * 0.45, -radius * 0.1), center + Vector2(radius * 0.45, -radius * 0.1), highlight, 3.0, true)
+			"hammer":
+				draw_line(center + Vector2(0, -radius * 0.45), center + Vector2(0, radius * 0.9), Color("#b47a4b"), radius * 0.35, true)
+				draw_rect(Rect2(center + Vector2(-radius, -radius * 0.85), Vector2(radius * 2, radius * 0.85)), color)
+				draw_line(center + Vector2(-radius * 0.7, -radius * 0.65), center + Vector2(radius * 0.7, -radius * 0.65), highlight, 2.0, true)
+			"book":
+				draw_rect(Rect2(center + Vector2(-radius * 0.8, -radius), Vector2(radius * 1.6, radius * 2)), color)
+				draw_rect(Rect2(center + Vector2(-radius * 0.65, radius * 0.55), Vector2(radius * 1.25, radius * 0.25)), Color("#e4d7bf"))
+				draw_line(center + Vector2(-radius * 0.4, -radius * 0.85), center + Vector2(-radius * 0.4, radius * 0.45), highlight, 2.0, true)
+			"potion":
+				draw_circle(center + Vector2(0, radius * 0.2), radius * 0.8, color)
+				draw_rect(Rect2(center + Vector2(-radius * 0.28, -radius * 0.8), Vector2(radius * 0.56, radius * 0.7)), color.lightened(0.2))
+				draw_rect(Rect2(center + Vector2(-radius * 0.38, -radius), Vector2(radius * 0.76, radius * 0.25)), Color("#cda77b"))
+				draw_circle(center + Vector2(-radius * 0.25, radius * 0.05), radius * 0.17, highlight)
+			_:
+				var gem := PackedVector2Array([center + Vector2(0, -radius), center + Vector2(radius * 0.72, -radius * 0.15), center + Vector2(radius * 0.52, radius * 0.65), center + Vector2(0, radius), center + Vector2(-radius * 0.72, radius * 0.15), center + Vector2(-radius * 0.52, -radius * 0.65)])
+				draw_colored_polygon(gem, color)
+				draw_line(center + Vector2(0, -radius), center + Vector2(-radius * 0.2, radius * 0.25), highlight, 1.5, true)
 
 	static func _tile_style(fill: Color, border: Color, line_width: int) -> StyleBoxFlat:
 		var style := StyleBoxFlat.new()
@@ -82,6 +130,7 @@ class InventoryGrid extends Control:
 var is_open := false
 var inventory: RefCounted
 var known := false
+var catalogue_query: Callable
 var pending_item: Dictionary = {}
 var selected_id := -1
 var preview_rotated := false
@@ -157,7 +206,7 @@ func _build() -> void:
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	right.add_theme_constant_override("separation", 12)
 	body.add_child(right)
-	_details = _label("点选晶石查看详情", 22)
+	_details = _label("点选物品查看详情", 22)
 	_details.custom_minimum_size.y = 140
 	_details.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	right.add_child(_details)
@@ -176,7 +225,7 @@ func _build() -> void:
 	_pending_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_pending_info.modulate = UI.WARNING
 	right.add_child(_pending_info)
-	_pending_button = _button("装入待拾取晶石", func() -> void: pending_requested.emit())
+	_pending_button = _button("装入待拾取物品", func() -> void: pending_requested.emit())
 	right.add_child(_pending_button)
 	var help := _label("点选 / 放置  ·  R 旋转  ·  右键取消  ·  Delete 丢弃", 18)
 	help.modulate = UI.MUTED
@@ -232,6 +281,7 @@ func refresh(is_known: bool) -> void:
 	_grid.inventory = inventory
 	_grid.fit_dimensions(inventory.columns, inventory.rows)
 	_grid.known = known
+	_grid.catalogue_query = catalogue_query
 	_grid.selected_id = selected_id
 	_grid.preview_rotated = preview_rotated
 	_grid.queue_redraw()
@@ -240,15 +290,29 @@ func refresh(is_known: bool) -> void:
 	_drop_button.disabled = selected.is_empty()
 	_rotate_button.disabled = selected.is_empty()
 	if selected.is_empty():
-		_details.text = "点选晶石查看详情"
+		_details.text = "点选物品查看详情"
 	else:
 		var size := Inventory.footprint(selected, preview_rotated)
-		_details.text = "%s\n磨损 %d%%\n%s\n占格 %d × %d" % [selected.get("label", "晶石"), int(selected.wear), _price_text(selected), size.x, size.y]
+		_details.text = "%s\n磨损 %d%%\n%s\n占格 %d × %d" % [_item_name(selected), int(selected.get("wear", 0)), _price_text(selected), size.x, size.y]
 	_pending_button.visible = not pending_item.is_empty()
 	_pending_info.visible = not pending_item.is_empty()
 	if not pending_item.is_empty():
 		var size: Vector2i = pending_item.get("footprint", Vector2i.ONE)
-		_pending_info.text = "待拾取 · %s\n%d × %d 格  ·  磨损 %d%%\n%s" % [pending_item.get("label", "晶石"), size.x, size.y, int(pending_item.wear), _price_text(pending_item)]
+		_pending_info.text = "待拾取 · %s\n%d × %d 格  ·  磨损 %d%%\n%s" % [_item_name(pending_item), size.x, size.y, int(pending_item.get("wear", 0)), _price_text(pending_item)]
+
+func set_catalogue_query(query: Callable) -> void:
+	catalogue_query = query
+	if is_node_ready():
+		refresh(known)
+
+func _item_name(item: Dictionary) -> String:
+	return str(item.get("item_name", item.get("label", "晶石" if str(item.get("item_type", "crystal")) == "crystal" else "物品")))
+
+func _item_known(item: Dictionary) -> bool:
+	var type_id := str(item.get("item_type", "crystal"))
+	if catalogue_query.is_valid():
+		return bool(catalogue_query.call(type_id))
+	return known and type_id in ["crystal", "moon_crystal_cluster"]
 
 func set_pending_item(item: Dictionary) -> void:
 	pending_item = item.duplicate(true)
@@ -261,9 +325,9 @@ func set_notice(value: String) -> void:
 	_notice.text = value
 
 func _price_text(item: Dictionary) -> String:
-	if not known:
+	if not _item_known(item):
 		return "估价 ? · 未鉴定"
-	var price := roundi(float(item.base_value) * (100 - int(item.wear)) / 100.0)
+	var price := roundi(float(item.get("base_value", 0)) * (100 - int(item.get("wear", 0))) / 100.0)
 	return "估价 %d" % price
 
 func _on_cell_clicked(cell: Vector2i) -> void:

@@ -2,12 +2,14 @@ extends SceneTree
 
 const Main = preload("res://main.gd")
 const OUT := "res://.demo-data/ui-refresh"
-const RESOLUTION := Vector2i(1100, 720)
+const DEFAULT_RESOLUTION := Vector2i(1100, 720)
 
 var game: Node3D
 var preview := false
 var captures: Array[String] = []
 var layout_results: Dictionary = {}
+var resolution := DEFAULT_RESOLUTION
+var out_path := OUT
 
 
 func _initialize() -> void:
@@ -22,13 +24,16 @@ func check(condition: bool, description: String) -> void:
 
 
 func run() -> void:
-	create_timer(50.0).timeout.connect(func() -> void:
+	create_timer(75.0).timeout.connect(func() -> void:
 		push_error("UI PREVIEW timed out")
 		quit(2))
 	preview = OS.get_cmdline_user_args().has("--preview") and DisplayServer.get_name() != "headless"
-	root.size = RESOLUTION
+	if OS.get_cmdline_user_args().has("--wide"):
+		resolution = Vector2i(1600, 720)
+		out_path += "-wide"
+	root.size = resolution
 	if preview:
-		check(DirAccess.make_dir_recursive_absolute(OUT) == OK, "create preview output directory")
+		check(DirAccess.make_dir_recursive_absolute(out_path) == OK, "create preview output directory")
 	game = Main.new()
 	game.progression = Main.Progression.new("")
 	game.progression.bank = 150
@@ -42,21 +47,67 @@ func run() -> void:
 	game.set_process_unhandled_input(false)
 	await process_frame
 	check(game.progression.profile_path.is_empty() and game.appraisal.catalogue_path.is_empty(), "both saves are in-memory fixtures")
-	check(game.base_open and paused, "production base opens on startup")
-	await shot("base")
+	check(game.base_open and paused and game.outpost_page == "title", "production title opens on startup")
+	check(game.radar_mode == Main.DetectorPanel.Mode.CIRCLE and game.detector_panel.display_mode == Main.DetectorPanel.Mode.CIRCLE, "new games default to the circular radar in both controller and HUD")
+	await shot("title")
+	var enter := game.outpost_panel.find_child("EnterOutpostButton", true, false) as Button
+	check(enter != null and enter.is_visible_in_tree(), "title has a visible enter-outpost action")
+	enter.pressed.emit()
+	check(game.outpost_page == "lobby" and paused, "title action opens the real paused lobby")
+	await shot("lobby")
+	game.show_outpost("museum")
+	check(game.museum_panel.is_open and paused and game.progression.museum_state.exhibits.is_empty(), "production museum opens empty for a new profile")
+	await shot("museum-empty")
+	_fill_museum()
+	game.show_outpost("museum")
+	check(game.progression.museum_state.exhibits.size() == 3 and game.progression.museum_state.warehouse.size() == 3, "visual museum fixture uses backend processing and leaves three real records unprocessed")
+	await shot("museum")
+	(game.museum_panel.find_child("CatalogueTab", true, false) as Button).pressed.emit()
+	game.museum_panel.select_exhibit("chest")
+	await shot("museum-catalogue")
+	(game.museum_panel.find_child("ResearchButton", true, false) as Button).pressed.emit()
+	check(game.outpost_page == "skills" and paused, "museum research opens the actual skill tree")
+	check((game.skill_tree_panel.find_child("Skill_museum_appeal_1", true, false) as Button).is_visible_in_tree(), "museum research selects the actual museum tab")
+	await shot("museum-research")
+	(game.skill_tree_panel.find_child("EquipmentTechTab", true, false) as Button).pressed.emit()
+	game.show_outpost("zones")
+	check(game.base_panel.is_open and not game.skill_tree_panel.is_open and paused, "zone selection is separate from skills")
+	check(game.base_panel.find_child("TrialButton", true, false) == null and game.base_panel.find_child("Buy_drill", true, false) == null, "normal zones contain no trial shortcut or combined upgrades")
+	await shot("expeditions")
+	game.show_outpost("skills")
+	check(game.skill_tree_panel.is_open and not game.base_panel.is_open and paused, "skill tree is a separate paused page")
+	check(game.skill_tree_panel._nodes.size() == 28, "equipment and museum branches expose twenty-eight real tier nodes across two tabs")
+	var range_node := game.skill_tree_panel.find_child("Skill_excavation_range_1", true, false) as Button
+	check(range_node != null and range_node.is_visible_in_tree(), "exploration range has a visible real skill node")
+	range_node.pressed.emit()
+	await shot("skills")
 
 	game.progression.bank = 6240
-	game.progression.levels = {"drill": 1, "oxygen": 1, "oxygen_supply": 1, "boots": 1, "backpack": 2, "detector": 2}
+	game.progression.levels.merge({"drill": 1, "oxygen": 1, "oxygen_supply": 1, "boots": 1, "backpack": 2, "detector": 2, "excavation_range": 3}, true)
 	game.apply_progression()
-	game.receipt = "本趟收入 1182 · 门票 60 · 净收益 +1122\n吸收氧矿 86 粒 · 恢复 %.1f 秒\n大型晶石 · 磨损 8%% · 售价 699\n中型晶石 · 磨损 22%% · 售价 312\n小型晶石 · 磨损 5%% · 售价 171\n首次出售已解锁估价" % (86 * Main.OXYGEN_PER_GRAIN)
-	game.message = "安全回舱，物品已出售"
+	game.receipt = str(game.progression.last_report.get("text", ""))
+	game.message = "已登记展品，其余物品可在仓库整理"
 	game.sync_base_state()
-	await shot("base-rich")
-	check(not game.base_panel._receipt.tooltip_text.is_empty(), "settlement retains full tooltip data")
+	game.show_outpost("lobby")
+	await shot("lobby-rich")
+	game.show_outpost("skills")
+	(game.skill_tree_panel.find_child("Skill_excavation_range_3", true, false) as Button).pressed.emit()
+	await shot("skills-upgraded")
+	check(not game.skill_tree_panel._detail_values.text.is_empty(), "selected skill retains exact current and next statistics")
+	game.show_outpost("report")
+	check(str(game.outpost_panel._state.receipt) == game.receipt and paused, "separate report retains the full settlement data")
+	await shot("report")
+	check(game.progression.buy_upgrade("museum_capacity").ok and game.progression.buy_upgrade("museum_capacity").ok, "preview expands the museum using actual upgrade transactions")
+	var remaining: Array = game.progression.museum_state.warehouse.duplicate(true)
+	for record: Dictionary in remaining:
+		game.on_museum_donate(int(record.uid))
+	game.sync_base_state()
+	game.show_outpost("museum")
+	check(game.progression.museum_state.exhibits.size() == 6 and game.progression.stats().museum_capacity == 6, "rich fixture opens all six real collected exhibit types and pedestals")
+	await shot("museum-expanded")
 
-	game.base_panel.close()
 	game.start_trip(false)
-	check(game.on_moon and not paused, "real free expedition starts")
+	check(game.on_moon and not paused and not game.outpost_panel.is_open and not game.skill_tree_panel.is_open and not game.base_panel.is_open, "real free expedition starts and closes every outpost page")
 	game.terrain.reset_terrain(11235)
 	game.spawn_crystals(11235)
 	check(game.crystals.size() >= 3, "deterministic mine contains real specimens")
@@ -77,6 +128,9 @@ func run() -> void:
 	game.update_hud()
 	check(game.crystal != null and game.crystal.visible, "normal HUD has an actual exposed crystal target")
 	check(game.cursor.visible, "normal HUD has an actual mineable ground hit")
+	await shot("hud-default-circle", true)
+	check(not game.detector_panel.get_global_rect().intersects(game.specimen_card.get_global_rect()), "default circle does not overlap specimen details")
+	game.set_radar_mode(Main.DetectorPanel.Mode.COMPASS)
 	check(not game.detector_panel.get_global_rect().intersects(game.specimen_card.get_global_rect()), "compass does not overlap specimen details")
 	check(not game.detector_panel.get_global_rect().intersects(game.oxygen_card.get_global_rect()), "compass does not overlap oxygen card")
 	await shot("hud", true)
@@ -88,11 +142,11 @@ func run() -> void:
 	game.update_hud()
 	await shot("help", true)
 	check(not game.help_card.get_global_rect().intersects(game.oxygen_card.get_global_rect()), "compass help stays below oxygen card")
-	check(Rect2(Vector2.ZERO, Vector2(RESOLUTION)).encloses(game.help_card.get_global_rect()), "compass help remains on screen")
+	check(Rect2(Vector2.ZERO, Vector2(resolution)).encloses(game.help_card.get_global_rect()), "compass help remains on screen")
 	game.show_help = false
 	game.update_hud()
 	check(game.oxygen == 42.0, "HUD preview keeps oxygen frozen")
-	check(game.reticle.visible and game.reticle.get_global_rect().has_point(Vector2(RESOLUTION) * 0.5), "real reticle remains at screen centre")
+	check(game.reticle.visible and game.reticle.get_global_rect().has_point(Vector2(resolution) * 0.5), "real reticle remains at screen centre")
 
 	game.suit.position = Vector3(15.0, 0.0, -10.0)
 	game.suit.position.y = game.terrain.height_at(game.suit.position.x, game.suit.position.z)
@@ -128,10 +182,15 @@ func run() -> void:
 	game.wants_mouse_capture = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	if preview:
-		var file := FileAccess.open(OUT + "/layout-results.json", FileAccess.WRITE)
+		var file := FileAccess.open(out_path + "/layout-results.json", FileAccess.WRITE)
 		check(file != null, "layout evidence file opens")
 		file.store_string(JSON.stringify(layout_results, "\t"))
-	print("UI_PREVIEW_OK in_memory_profiles modal_bounds button_bounds nonoverlap_grid centre_reticle frozen_oxygen captures=", ",".join(captures))
+	game.sfx.set_muted(true)
+	await create_timer(0.10, true).timeout
+	game.queue_free()
+	await process_frame
+	await create_timer(0.25, true).timeout
+	print("UI_PREVIEW_OK title_lobby_zones_skills_report_museum in_memory_profiles modal_bounds button_bounds nonoverlap_grid centre_reticle frozen_oxygen resolution=", resolution, " captures=", ",".join(captures))
 	quit(0)
 
 
@@ -168,12 +227,23 @@ func warm_world(frames: int) -> void:
 
 
 func shot(filename: String, update_world: bool = false) -> void:
+	if game.base_open:
+		# Capture settled production UI, not the intentionally faded entrance frame.
+		await create_timer(0.35, true).timeout
 	for frame in range(3):
 		if update_world:
 			game._process(1.0 / 60.0)
 		await process_frame
 	if game.base_open:
-		check_modal(game.base_panel.find_child("BaseWindow", true, false), filename)
+		match game.outpost_page:
+			"museum":
+				check_modal(game.museum_panel.find_child("MuseumWindow", true, false), filename)
+			"zones":
+				check_modal(game.base_panel.find_child("BaseWindow", true, false), filename)
+			"skills":
+				check_modal(game.skill_tree_panel.find_child("SkillTreeWindow", true, false), filename)
+			_:
+				check_modal(game.outpost_panel.find_child("OutpostWindow", true, false), filename)
 	elif game.inventory_open:
 		var inventory_window: PanelContainer = null
 		for child: Node in game.inventory_panel._root_control.get_children():
@@ -188,14 +258,14 @@ func shot(filename: String, update_world: bool = false) -> void:
 		check(Input.mouse_mode == Input.MOUSE_MODE_CAPTURED, filename + " captures pointer")
 	if preview:
 		await RenderingServer.frame_post_draw
-		check(root.get_texture().get_image().save_png(OUT + "/" + filename + ".png") == OK, "save " + filename)
+		check(root.get_texture().get_image().save_png(out_path + "/" + filename + ".png") == OK, "save " + filename)
 		captures.append(filename)
 
 
 func check_modal(window: Control, name: String) -> void:
-	var viewport_rect := Rect2(Vector2.ZERO, Vector2(RESOLUTION))
+	var viewport_rect := Rect2(Vector2.ZERO, Vector2(resolution))
 	var window_rect := window.get_global_rect()
-	check(viewport_rect.grow(1.0).encloses(window_rect), name + " window stays within 1100 x 720: " + str(window_rect))
+	check(viewport_rect.grow(1.0).encloses(window_rect), name + " window stays within " + str(resolution) + ": " + str(window_rect))
 	var buttons: Array[Control] = []
 	_collect_buttons(window, buttons)
 	var painted: Array[Rect2] = []
@@ -226,6 +296,29 @@ func _collect_buttons(node: Node, result: Array[Control]) -> void:
 		if child is BaseButton:
 			result.append(child)
 		_collect_buttons(child, result)
+
+
+func _fill_museum() -> void:
+	# Visual fixtures travel through the same validated ledger and registration
+	# operations as gameplay. Production starts empty; no invented gallery models.
+	var fixtures: Array[Dictionary] = [
+		{"item_type": "crystal", "label": "小型晶石", "item_name": "小型晶石", "footprint": Vector2i(1, 1), "wear": 8, "base_value": 180, "icon_color": Color("#b875ed")},
+		{"item_type": "crystal", "label": "中型晶石", "item_name": "中型晶石", "footprint": Vector2i(1, 2), "wear": 22, "base_value": 400, "icon_color": Color("#b875ed")},
+		{"item_type": "crystal", "label": "大型晶石", "item_name": "大型晶石", "footprint": Vector2i(2, 2), "wear": 5, "base_value": 760, "icon_color": Color("#b875ed")},
+	]
+	for index in range(Main.AdventureItems.ITEMS.size()):
+		var definition: Dictionary = Main.AdventureItems.definition(index)
+		fixtures.append({"item_type": definition.id, "label": definition.label, "item_name": definition.label,
+			"footprint": definition.footprint, "wear": [15, 25, 40][index], "base_value": definition.value, "icon_color": definition.color})
+	var entry: Dictionary = game.progression.pay_entry("meadow", true)
+	check(entry.ok, "museum preview starts a free isolated fixture expedition")
+	var result: Dictionary = game.progression.settle_expedition(int(entry.trip_id), fixtures, false, 65.0)
+	check(result.ok, "museum preview deposits validated persistent cargo")
+	var records: Array = game.progression.museum_state.warehouse.duplicate(true)
+	for record: Dictionary in records:
+		if record.key in ["crystal_small", "chest", "shield"]:
+			game.on_museum_donate(int(record.uid))
+	game.sync_base_state()
 
 
 func _fill_inventory() -> void:

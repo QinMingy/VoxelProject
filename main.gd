@@ -11,12 +11,16 @@ class MiningRing extends Control:
 const Terrain = preload("res://terrain.gd")
 const Suit = preload("res://suit.gd")
 const Crystal = preload("res://crystal.gd")
+const AdventureItems = preload("res://adventure_items.gd")
 const Appraisal = preload("res://appraisal.gd")
 const Inventory = preload("res://inventory.gd")
 const InventoryPanel = preload("res://inventory_panel.gd")
 const GMPanel = preload("res://gm_panel.gd")
 const Progression = preload("res://progression.gd")
 const BasePanel = preload("res://base_panel.gd")
+const OutpostPanel = preload("res://outpost_panel.gd")
+const SkillTreePanel = preload("res://skill_tree_panel.gd")
+const MuseumPanel = preload("res://museum_panel.gd")
 const Detector = preload("res://detector.gd")
 const DetectorPanel = preload("res://detector_panel.gd")
 const ActivityBoundary = preload("res://activity_boundary.gd")
@@ -55,6 +59,12 @@ var gm_open := false
 var gm_resume_mouse_capture := true
 var progression: Progression
 var base_panel: BasePanel
+var outpost_panel: OutpostPanel
+var skill_tree_panel: SkillTreePanel
+var museum_panel: MuseumPanel
+var outpost_page := ""
+var _outpost_transition := false
+var _gm_return_page := ""
 var base_open := false
 var auto_open_base := true
 var profile_transient := false
@@ -63,10 +73,12 @@ var walk_speed := WALK_SPEED
 var detector_level := 0
 var detector_reading: Dictionary = {}
 var detector_panel: DetectorPanel
-var radar_mode := DetectorPanel.Mode.COMPASS
+var radar_mode := DetectorPanel.Mode.CIRCLE
 var oxygen_card: PanelContainer
 var trip_zone: Dictionary = {}
 var trip_fee := 0
+var trip_id := 0
+var trip_elapsed := 0.0
 var resume_mouse_capture := true
 var pending_pickup: Crystal
 # Compatibility view for existing smoke checks; inventory owns the actual snapshots.
@@ -79,6 +91,7 @@ var packed_specimens: Array[int]:
 var nearest_signal: Crystal
 var crystal_scan_time := 0.0
 var map_random := RandomNumberGenerator.new()
+var adventure_trial := false
 var wants_mouse_capture := true
 var touch_mode := OS.has_feature("mobile")
 var touch_controls: TouchControls
@@ -100,6 +113,7 @@ var first_person := false
 var first_person_rig: FirstPersonRig
 var drill_target := Vector3.ZERO
 var hud: Label
+var hud_surface: Control
 var hint: Label
 var oxygen_bar: ProgressBar
 var resource_line: Label
@@ -123,6 +137,7 @@ var oxygen_limit := ROUND_SECONDS
 var mining_time := 0.9
 var oxygen_grains := 0
 var oxygen_recovered := 0.0
+var oxygen_recovery_limit := 6.0
 var pending_oxygen_grains := 0
 var pickup_count := 0.0
 var pickup_time := 0.0
@@ -138,10 +153,9 @@ var upgrades: int:
 		return int(progression.levels.get("drill", 0)) if progression != null else 0
 var on_moon := false
 var was_interact := false
-var was_trial := false
 var was_pickup := false
 var was_upgrade := false
-var message := "E / M 打开基地整备，购置装备后选择矿区"
+var message := "欢迎来到月面前哨站"
 var view_yaw := -PI * 0.5
 var view_pitch := 0.74
 var camera_anchor := Vector3.ZERO
@@ -155,7 +169,12 @@ var pickup_material := StandardMaterial3D.new()
 var flight_rng := RandomNumberGenerator.new()
 
 func _ready() -> void:
-	get_window().title = "月面采掘 · 装备商店 / 探测仪"
+	var quick_adventure := OS.get_cmdline_user_args().has("--adventure-trial")
+	if quick_adventure:
+		progression = Progression.new("")
+		appraisal = Appraisal.new("")
+		auto_open_base = false
+	get_window().title = "月面采掘 · 冒险遗物试挖" if quick_adventure else "月面采掘 · 展览馆大厅"
 	sfx = GameAudio.new()
 	add_child(sfx)
 	if progression == null:
@@ -168,6 +187,7 @@ func _ready() -> void:
 	receipt = str(progression.last_report.get("text", ""))
 	apply_progression()
 	appraisal.load_catalogue()
+	_sync_museum_catalogue()
 	var world := WorldEnvironment.new()
 	world_environment = world
 	var env := Environment.new()
@@ -196,8 +216,10 @@ func _ready() -> void:
 	add_child(sun)
 	terrain = Terrain.new()
 	terrain.set_oxygen_supply_density(float(progression.stats().oxygen_supply_density))
+	terrain.set_activity_radius(float(progression.stats().activity_radius))
 	add_child(terrain)
 	activity_boundary = ActivityBoundary.new()
+	activity_boundary.set_radius(float(progression.stats().activity_radius))
 	add_child(activity_boundary)
 	suit = Suit.new()
 	add_child(suit)
@@ -243,6 +265,7 @@ func _ready() -> void:
 	touch_controls.action_pressed.connect(_on_touch_action)
 	inventory_panel = InventoryPanel.new()
 	add_child(inventory_panel)
+	inventory_panel.set_catalogue_query(appraisal.is_known)
 	inventory_panel.closed.connect(close_inventory)
 	inventory_panel.drop_requested.connect(drop_inventory_item)
 	inventory_panel.pending_requested.connect(collect_pending_item)
@@ -252,6 +275,7 @@ func _ready() -> void:
 	gm_panel.opened.connect(_on_gm_opened)
 	gm_panel.closed.connect(_on_gm_closed)
 	gm_panel.action_requested.connect(_on_gm_action)
+	gm_panel.technology_requested.connect(_on_gm_technology)
 	gm_panel.cleanup_changed.connect(_on_gm_cleanup_changed)
 	gm_panel.brush_selected.connect(_on_gm_brush_selected)
 	gm_panel.performance_changed.connect(_on_gm_performance_changed)
@@ -265,10 +289,30 @@ func _ready() -> void:
 	add_child(base_panel)
 	base_panel.opened.connect(_on_base_opened)
 	base_panel.closed.connect(_on_base_closed)
-	base_panel.upgrade_requested.connect(purchase_upgrade)
 	base_panel.zone_selected.connect(select_zone)
 	base_panel.deploy_requested.connect(func() -> void: start_trip(false))
-	base_panel.trial_requested.connect(func() -> void: start_trip(true))
+	skill_tree_panel = SkillTreePanel.new()
+	add_child(skill_tree_panel)
+	skill_tree_panel.opened.connect(_on_base_opened)
+	skill_tree_panel.closed.connect(_on_base_closed)
+	skill_tree_panel.upgrade_requested.connect(purchase_upgrade)
+	skill_tree_panel.feedback.connect(_sound)
+	museum_panel = MuseumPanel.new()
+	add_child(museum_panel)
+	museum_panel.opened.connect(_on_base_opened)
+	museum_panel.closed.connect(_on_base_closed)
+	museum_panel.donate_requested.connect(on_museum_donate)
+	museum_panel.sell_requested.connect(on_museum_sell)
+	museum_panel.place_requested.connect(on_museum_place)
+	museum_panel.research_requested.connect(open_museum_research)
+	museum_panel.feedback.connect(_sound)
+	outpost_panel = OutpostPanel.new()
+	add_child(outpost_panel)
+	outpost_panel.opened.connect(_on_base_opened)
+	outpost_panel.closed.connect(_on_base_closed)
+	outpost_panel.navigate_requested.connect(show_outpost)
+	outpost_panel.debug_requested.connect(open_outpost_gm)
+	outpost_panel.display_slot_requested.connect(open_lobby_stand)
 	sfx.bind_ui(self)
 	if touch_mode:
 		set_touch_mode(true)
@@ -276,9 +320,18 @@ func _ready() -> void:
 		_sync_touch_state()
 	update_hud()
 	if auto_open_base:
-		call_deferred("open_base")
+		call_deferred("show_outpost", "title")
+	if quick_adventure:
+		call_deferred("_start_quick_adventure")
 	if DisplayServer.get_name() != "headless":
 		prewarm_effects()
+
+func _start_quick_adventure() -> void:
+	_on_gm_action("adventure_trial")
+	var occupied := 0
+	for item in crystals:
+		occupied += item.get_world_cells().size()
+	print("ADVENTURE_READY items=%d occupied_cells=%d transient_progress=true" % [crystals.size(), occupied])
 
 func prewarm_effects() -> void:
 	# Compile effect materials during startup instead of on the first mining hit.
@@ -347,6 +400,7 @@ func build_hud() -> void:
 	var overlay := CanvasLayer.new()
 	add_child(overlay)
 	var surface := Control.new()
+	hud_surface = surface
 	surface.name = "MiningHUD"
 	surface.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	surface.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -610,6 +664,7 @@ func set_touch_mode(enabled: bool) -> void:
 		call_deferred("capture_mouse")
 	sync_gm_state()
 	update_hud()
+	sync_base_state()
 
 func _on_touch_look(delta: Vector2) -> void:
 	if not touch_mode or not input_focused or inventory_open or gm_open or base_open:
@@ -702,8 +757,9 @@ func move_suit(movement: Vector3, delta: float, jump_held: bool = false) -> void
 func _physics_process(delta: float) -> void:
 	if inventory_open or gm_open or base_open or not input_focused:
 		return
+	if on_moon:
+		trip_elapsed += delta
 	var action := Input.is_physical_key_pressed(KEY_E)
-	var trial := Input.is_physical_key_pressed(KEY_T)
 	var near := suit.position.distance_to(LANDER) < HATCH_REACH
 	if near:
 		if action and not was_interact:
@@ -711,10 +767,7 @@ func _physics_process(delta: float) -> void:
 				settle(false)
 			else:
 				open_base()
-		elif trial and not was_trial and not on_moon:
-			start_trip(true)
 	was_interact = action
-	was_trial = trial
 	var pickup := Input.is_physical_key_pressed(KEY_F)
 	if pickup and not was_pickup:
 		pick_up_cluster()
@@ -744,7 +797,7 @@ func _physics_process(delta: float) -> void:
 	if first_person:
 		update_camera()
 	var hit := aim_at_terrain() if on_moon else {}
-	var can_mine := not hit.is_empty()
+	var can_mine := not hit.is_empty() and terrain.is_activity_cell(hit.cell)
 	var target: Vector3 = hit.get("position", Vector3.ZERO)
 	var normal: Vector3 = hit.get("normal", Vector3.UP)
 	var drilling := can_mine and (touch_controls.mining_held() if touch_mode else captured and Time.get_ticks_msec() >= capture_guard_until and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT))
@@ -821,16 +874,21 @@ func _process(delta: float) -> void:
 func start_trip(short_oxygen: bool) -> void:
 	if on_moon:
 		return
-	var entry := progression.pay_entry(progression.selected_zone)
+	var entry := progression.pay_entry(progression.selected_zone, adventure_trial)
 	if not entry.ok:
 		message = str(entry.message)
 		sync_base_state()
 		return
 	trip_zone = entry.zone.duplicate(true)
 	trip_fee = int(entry.fee)
+	trip_id = int(entry.trip_id)
+	trip_elapsed = 0.0
 	if base_open:
-		base_panel.close()
+		_close_outpost_for_departure()
 	apply_progression()
+	# Range and target population are a snapshot for this expedition.
+	activity_boundary.set_radius(float(trip_zone.get("activity_radius", progression.stats().activity_radius)))
+	terrain.set_activity_radius(activity_boundary.radius)
 	terrain.reset_terrain()
 	oxygen_grains = 0
 	oxygen_recovered = 0.0
@@ -852,13 +910,13 @@ func start_trip(short_oxygen: bool) -> void:
 	on_moon = true
 	_sound("deploy")
 	_sync_touch_state()
-	if short_oxygen:
+	if short_oxygen and not crystals.is_empty():
 		var direction := crystals[0].position - suit.position
 		view_yaw = atan2(-direction.x, -direction.z)
 		view_pitch = 0.24
 		update_camera()
 	update_crystal_targets()
-	message = "%s · 已出舱" % trip_zone.name
+	message = "遗物试挖 · 舱前有宝箱、盾牌和战锤" if adventure_trial else "%s · 已出舱" % trip_zone.name
 
 func spawn_crystals(seed_value: int = -1) -> void:
 	terrain.clear_crystals()
@@ -876,21 +934,41 @@ func spawn_crystals(seed_value: int = -1) -> void:
 	else:
 		map_random.randomize()
 	var zone := trip_zone if not trip_zone.is_empty() else progression.get_zone(progression.selected_zone)
-	for index in range(int(zone.count)):
+	var item_count := 3 if adventure_trial else int(zone.count)
+	# Three nearby crystal sizes remain an accessible starter sample. Relics
+	# then scale with the actual deployed area's population, not a fixed six.
+	var relic_slots: Dictionary = {}
+	if not adventure_trial:
+		var relic_count := mini(int(zone.get("relic_count", 3)), item_count - 3)
+		for index in range(mini(3, relic_count)):
+			relic_slots[index + 3] = index
+		var extra_slots: Array[int] = []
+		for index in range(6, item_count):
+			extra_slots.append(index)
+		for index in range(extra_slots.size() - 1, 0, -1):
+			var other := map_random.randi_range(0, index)
+			var swap := extra_slots[index]
+			extra_slots[index] = extra_slots[other]
+			extra_slots[other] = swap
+		for index in range(maxi(0, relic_count - 3)):
+			relic_slots[extra_slots[index]] = (index + 3) % AdventureItems.ITEMS.size()
+	for index in range(item_count):
 		var site := Vector3.ZERO
 		var best_site := Vector3.ZERO
 		var best_clearance := -1.0
-		for attempt in range(96):
-			if index < 14:
+		for attempt in range(192):
+			if index < 14 and attempt < 64:
 				var angle := map_random.randf_range(0.0, TAU)
 				var radius := map_random.randf_range(4.0, 8.0) if index < 3 else map_random.randf_range(8.0, 16.0)
 				site = LANDER + Vector3(cos(angle), 0, sin(angle)) * radius
 			else:
 				var angle := map_random.randf_range(0.0, TAU)
-				var radius := sqrt(map_random.randf()) * (ActivityBoundary.RADIUS - 1.5)
+				var radius := sqrt(map_random.randf()) * (activity_boundary.radius - 1.5)
 				site = Vector3(cos(angle), 0, sin(angle)) * radius
 			site.x = snappedf(site.x, Terrain.CELL_SIZE)
 			site.z = snappedf(site.z, Terrain.CELL_SIZE)
+			if not terrain.is_in_activity_area(site, 1.5):
+				continue
 			var clearance := Vector2(site.x - LANDER.x, site.z - LANDER.z).length()
 			for other in crystals:
 				clearance = minf(clearance, Vector2(other.position.x - site.x, other.position.z - site.z).length())
@@ -900,6 +978,8 @@ func spawn_crystals(seed_value: int = -1) -> void:
 			if clearance >= 2.8:
 				break
 		site = best_site
+		if adventure_trial:
+			site = LANDER + [Vector3(-0.5, 0, -3.4), Vector3(2.0, 0, -4.0), Vector3(4.5, 0, -4.2)][index]
 		var item := Crystal.new()
 		item.position = site
 		add_child(item)
@@ -915,13 +995,35 @@ func spawn_crystals(seed_value: int = -1) -> void:
 		var size_tier := 0 if roll < float(weights[0]) else (1 if roll < float(weights[0]) + float(weights[1]) else 2)
 		if index < 3:
 			size_tier = index
-		item.setup_site(surface, burial, [0.30, 0.42, 0.54][size_tier])
+		# Keep the first three legacy crystals as a comparison and for existing smoke fixtures.
+		var adventure_index := index if adventure_trial else int(relic_slots.get(index, -1))
+		if adventure_index >= 0:
+			var definition := AdventureItems.definition(adventure_index)
+			var orientation := Vector3(map_random.randi_range(0, 3), map_random.randi_range(0, 3), map_random.randi_range(0, 3)) * (PI * 0.5)
+			if adventure_trial:
+				orientation = [Vector3.ZERO, Vector3(-PI * 0.5, 0, 0), Vector3(0, 0, PI * 0.5)][index]
+				burial = [-0.18, 0.0, 0.125][index]
+			if not item.setup_adventure(AdventureItems.source_scene(adventure_index), definition, orientation, surface, burial):
+				push_error("遗物体素化失败：" + str(definition.label))
+				remove_child(item)
+				item.queue_free()
+				continue
+			# Evaluate every occupied column so the requested cover also holds on sloping ground.
+			var ceiling := INF
+			for local_cell: Vector3i in item._geometry.cells:
+				var local_top := (float(local_cell.y) + 1.0) * Terrain.CELL_SIZE
+				var horizontal := item.position + Vector3(local_cell.x + 0.5, 0, local_cell.z + 0.5) * Terrain.CELL_SIZE
+				ceiling = minf(ceiling, terrain.height_at(horizontal.x, horizontal.z) - burial - local_top)
+			item.position.y = floorf((ceiling - Terrain.WORLD_MIN.y) / Terrain.CELL_SIZE) * Terrain.CELL_SIZE + Terrain.WORLD_MIN.y
+		else:
+			item.setup_site(surface, burial, [0.30, 0.42, 0.54][size_tier])
 		if not item.embed_in(terrain):
 			push_warning("晶石占位失败，跳过重叠或越界矿点")
 			remove_child(item)
 			item.queue_free()
 			continue
-		item.wear_percent = map_random.randi_range(0, Appraisal.MAX_WEAR)
+		var wear_range: Array = zone.get("wear_range", [0, Appraisal.MAX_WEAR])
+		item.wear_percent = map_random.randi_range(int(wear_range[0]), int(wear_range[1]))
 		item.set_wear(float(item.wear_percent) / 100.0)
 		item.is_exposed(terrain)
 		item.set_markers_visible(false)
@@ -987,6 +1089,7 @@ func pick_up_cluster() -> void:
 func specimen_data(item: Crystal) -> Dictionary:
 	return {"id": item.get_instance_id(), "world_id": item.get_instance_id(),
 		"label": item.size_label, "footprint": item.footprint,
+		"item_type": item.item_type, "item_name": item.item_name, "icon_color": item.icon_color,
 		"wear": item.wear_percent, "base_value": item.base_value}
 
 func collect_crystal(item: Crystal) -> bool:
@@ -1000,7 +1103,7 @@ func collect_crystal(item: Crystal) -> bool:
 	cluster_inspected = true
 	item.store_in_inventory()
 	_sound("crystal_pickup")
-	message = "已收集 %d 颗晶石，可继续寻找或回舱出售" % packed_specimens.size()
+	message = "已装入 %s · 共 %d 件，可继续寻找或回舱入库" % [item.item_name, packed_specimens.size()]
 	update_crystal_targets()
 	return true
 
@@ -1064,13 +1167,17 @@ func _on_gm_closed() -> void:
 	wants_mouse_capture = gm_resume_mouse_capture
 	was_pickup = Input.is_physical_key_pressed(KEY_F)
 	was_interact = Input.is_physical_key_pressed(KEY_E)
-	was_trial = Input.is_physical_key_pressed(KEY_T)
 	was_upgrade = Input.is_physical_key_pressed(KEY_U)
 	locomotion.sync_jump_input(Input.is_physical_key_pressed(KEY_SPACE))
 	progress = 0.0
 	update_hud()
 	if wants_mouse_capture:
 		call_deferred("capture_mouse")
+	if not _gm_return_page.is_empty():
+		var previous_page := _gm_return_page
+		_gm_return_page = ""
+		if not on_moon:
+			show_outpost(previous_page)
 
 func sync_gm_state() -> void:
 	if gm_panel == null:
@@ -1084,6 +1191,9 @@ func sync_gm_state() -> void:
 		"touch_mode": touch_mode,
 		"audio_enabled": not sfx.muted,
 		"on_moon": on_moon, "oxygen": oxygen, "mining_time": mining_time,
+		"bank": bank, "research_points": progression.research_points,
+		"technology_rows": progression.upgrade_rows(),
+		"debug_progression_allowed": not on_moon and progression.active_trip.is_empty() and inventory.items.is_empty(),
 		"cleanup_status": "累计清理 %d 格 · 候选 %d 格 · 邻域任务 %d" % [int(stats.get("cleanup_removed", 0)), int(stats.get("cleanup_pending", 0)), int(stats.get("cleanup_scans", 0))],
 		"message": message,
 	})
@@ -1091,6 +1201,27 @@ func sync_gm_state() -> void:
 func _on_gm_cleanup_changed(enabled: bool, max_cells: int) -> void:
 	terrain.set_fragment_cleanup(enabled, max_cells)
 	message = "小孤立土块清理：%s，整块最多 %d 格" % ["开启" if enabled else "关闭", terrain.cleanup_max_cells]
+	sync_gm_state()
+
+func _on_gm_technology(action: String, upgrade_id: String, value: int) -> void:
+	if not gm_open:
+		return
+	# The owner checks this independently of disabled UI controls. Shrinking a
+	# live backpack or changing a departing expedition's snapshot would lose data.
+	if on_moon or not progression.active_trip.is_empty() or not inventory.items.is_empty():
+		message = "请先完成返航并清空现场背包，再调整局外科技"
+		_sound("error")
+		sync_gm_state()
+		return
+	var result := progression.apply_debug_change(action, upgrade_id, value)
+	message = str(result.get("message", "科技调试未完成"))
+	if bool(result.get("ok", false)):
+		apply_progression()
+		sync_base_state()
+		_sound("purchase")
+	else:
+		_sound("error")
+	update_hud()
 	sync_gm_state()
 
 func _on_gm_brush_selected(index: int) -> void:
@@ -1135,7 +1266,16 @@ func _on_gm_action(action: String) -> void:
 			message = "GM 已恢复到当前电镐等级的开采速度"
 		"start_trip", "start_trial":
 			if not on_moon:
+				adventure_trial = false
 				start_trip(action == "start_trial")
+		"adventure_trial":
+			if not on_moon:
+				adventure_trial = true
+				start_trip(true)
+				if on_moon:
+					gm_panel.close()
+				else:
+					adventure_trial = false
 		"reset_catalogue":
 			if not on_moon:
 				reset_appraisal_catalogue()
@@ -1145,9 +1285,11 @@ func _on_gm_action(action: String) -> void:
 func apply_progression() -> void:
 	var stats := progression.stats()
 	mining_time = float(stats.mining_time)
+	oxygen_recovery_limit = float(stats.oxygen_recovery_limit)
 	walk_speed = float(stats.walk_speed)
 	detector_level = int(stats.detector_level)
 	if terrain != null:
+		terrain.set_mining_radius(float(stats.mining_radius))
 		terrain.set_oxygen_supply_density(float(stats.oxygen_supply_density))
 	inventory.columns = int(stats.bag_columns)
 	inventory.rows = int(stats.bag_rows)
@@ -1158,13 +1300,38 @@ func apply_progression() -> void:
 func open_base() -> void:
 	if on_moon or inventory_open or gm_open or base_open:
 		return
-	base_panel.open()
+	show_outpost("lobby")
+
+func show_outpost(page: String) -> void:
+	if on_moon or inventory_open or gm_open or page not in ["title", "lobby", "zones", "skills", "report", "museum"]:
+		return
+	if base_open and outpost_page == page:
+		return
+	_outpost_transition = true
+	base_panel.close()
+	skill_tree_panel.close()
+	museum_panel.close()
+	outpost_panel.close()
+	outpost_page = page
+	sync_base_state()
+	match page:
+		"zones": base_panel.open()
+		"skills":
+			skill_tree_panel.set_tab("equipment")
+			skill_tree_panel.open()
+		"museum":
+			museum_panel.show_warehouse()
+			museum_panel.open()
+		_: outpost_panel.open(page)
+	_outpost_transition = false
+	update_hud()
 
 func _on_base_opened() -> void:
+	if not base_open:
+		base_resume_mouse_capture = wants_mouse_capture
 	base_open = true
 	_suspend_controls()
 	_sound("menu_open")
-	base_resume_mouse_capture = wants_mouse_capture
 	wants_mouse_capture = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	gm_panel.set_available(false)
@@ -1177,7 +1344,43 @@ func _on_base_opened() -> void:
 	get_tree().paused = true
 
 func _on_base_closed() -> void:
+	if _outpost_transition:
+		return
+	# Closing a subpage returns to the lobby, never to an unpaused mine.
+	show_outpost("title" if outpost_page == "lobby" else "lobby")
+
+func open_outpost_gm() -> void:
+	if not base_open or on_moon or gm_open or inventory_open:
+		return
+	_gm_return_page = outpost_page
+	_close_outpost_for_departure(false)
+	gm_panel.open()
+
+func open_museum_research() -> void:
+	show_outpost("skills")
+	skill_tree_panel.set_tab("museum")
+
+func open_lobby_stand(slot: int) -> void:
+	if not base_open or outpost_page != "lobby" or on_moon:
+		return
+	var capacity := int(progression.museum_summary().get("capacity", 3))
+	if slot < 0 or slot >= 6:
+		return
+	if slot >= capacity:
+		open_museum_research()
+		return
+	show_outpost("museum")
+	museum_panel.inspect_stand(slot)
+
+func _close_outpost_for_departure(restore_pointer: bool = true) -> void:
+	_outpost_transition = true
+	base_panel.close()
+	skill_tree_panel.close()
+	museum_panel.close()
+	outpost_panel.close()
+	_outpost_transition = false
 	base_open = false
+	outpost_page = ""
 	_sync_touch_state()
 	_sound("menu_close")
 	get_tree().paused = false
@@ -1185,20 +1388,72 @@ func _on_base_closed() -> void:
 	reticle.show()
 	wants_mouse_capture = base_resume_mouse_capture
 	was_interact = Input.is_physical_key_pressed(KEY_E)
-	was_trial = Input.is_physical_key_pressed(KEY_T)
 	was_upgrade = Input.is_physical_key_pressed(KEY_U)
 	locomotion.sync_jump_input(Input.is_physical_key_pressed(KEY_SPACE))
 	update_hud()
-	if wants_mouse_capture:
+	if restore_pointer and wants_mouse_capture:
 		call_deferred("capture_mouse")
 
 func sync_base_state() -> void:
 	if base_panel == null:
 		return
-	base_panel.sync_state({"bank": bank, "upgrades": progression.upgrade_rows(),
+	var museum_summary := progression.museum_summary()
+	# Legacy catalogue knowledge is still valid. Merge it for presentation without
+	# rewriting a migrated profile merely because the player opened a menu.
+	for kind: String in ["crystal", "chest", "shield", "hammer"]:
+		if appraisal.is_known(kind) and kind not in museum_summary.identified_types:
+			museum_summary.identified_types.append(kind)
+	var state := {"bank": bank, "research_points": progression.research_points, "museum": museum_summary, "upgrades": progression.upgrade_rows(),
 		"zones": progression.zones(), "selected_zone": progression.selected_zone,
-		"stats": progression.stats(), "receipt": receipt,
-		"message": ("临时试玩不保存 · 原成长存档异常，文件已保留。\n" if profile_transient else "") + message})
+		"stats": progression.stats(), "receipt": receipt, "report": progression.last_report, "touch_mode": touch_mode,
+		"message": ("临时试玩不保存 · 原成长存档异常，文件已保留。\n" if profile_transient else "") + message}
+	base_panel.sync_state(state)
+	if skill_tree_panel != null:
+		skill_tree_panel.sync_state(state)
+	if outpost_panel != null:
+		outpost_panel.sync_state(state)
+	if museum_panel != null:
+		museum_panel.sync_state(state)
+
+func _sync_museum_catalogue() -> void:
+	if progression == null or appraisal == null:
+		return
+	var changed := false
+	for kind: String in progression.museum_summary().get("identified_types", []):
+		if not appraisal.is_known(kind):
+			appraisal.record_item_sale(kind, 0, false)
+			changed = true
+	if changed:
+		appraisal.save_catalogue()
+
+func _finish_museum_action(result: Dictionary) -> void:
+	message = str(result.get("message", "操作未完成"))
+	if bool(result.get("ok", false)):
+		# Keep the legacy appraisal cache's last-sale detail. The profile remains
+		# the owner of the atomic sale and identification, even if this cache fails.
+		if result.has("item") and result.has("income"):
+			var record: Dictionary = result.item
+			var cache_error := appraisal.record_item_sale(str(record.get("item_type", "crystal")), int(result.income))
+			if cache_error != OK:
+				message += " · 资金已保存，鉴定缓存稍后恢复"
+		_sync_museum_catalogue()
+		_sound("purchase")
+	else:
+		_sound("error")
+	sync_base_state()
+	update_hud()
+
+func on_museum_donate(uid: int) -> void:
+	if not on_moon:
+		_finish_museum_action(progression.donate_item(uid))
+
+func on_museum_sell(uid: int) -> void:
+	if not on_moon:
+		_finish_museum_action(progression.sell_item(uid))
+
+func on_museum_place(key: String, slot: int) -> void:
+	if not on_moon:
+		_finish_museum_action(progression.place_exhibit(key, slot))
 
 func purchase_upgrade(upgrade_id: String) -> void:
 	if on_moon:
@@ -1224,9 +1479,13 @@ func select_zone(zone_id: String) -> void:
 	sync_base_state()
 
 func reset_appraisal_catalogue() -> void:
+	var result: Dictionary = progression.reset_identification()
+	if not result.ok:
+		message = str(result.message)
+		return
 	var reset_error := appraisal.reset_catalogue()
 	receipt = ""
-	message = "图鉴已重置，下次出售重新体验首次鉴定" if reset_error == OK else "图鉴已在本次试玩重置，本地保存失败"
+	message = "图鉴已重置，下次出售或入馆重新鉴定" if reset_error == OK else "图鉴已在本次试玩重置，本地保存失败"
 
 func process_soil_cleanup() -> void:
 	var result := terrain.process_fragment_cleanup()
@@ -1246,14 +1505,14 @@ func drop_inventory_item(item_id: int) -> void:
 	var heading := Basis(Vector3.UP, view_yaw)
 	var ground := suit.position - heading.z * 0.75 + heading.x * 0.55
 	# Leave room for the whole shape and the nearby safe-placement candidates.
-	var horizontal := Vector2(ground.x, ground.z).limit_length(ActivityBoundary.RADIUS - 1.25)
+	var horizontal := Vector2(ground.x, ground.z).limit_length(activity_boundary.radius - 1.25)
 	ground.x = horizontal.x
 	ground.z = horizontal.y
 	ground.y = terrain.support_height(ground.x, ground.z, suit.position.y + 0.55)
 	item.set_wear(float(record.wear) / 100.0)
 	if not item.drop_at(ground):
 		_sound("error")
-		message = "脚边没有容纳整块晶石的空位，请换个位置再丢弃"
+		message = "脚边没有容纳整件物品的空位，请换个位置再丢弃"
 		inventory_panel.set_notice(message)
 		return
 	inventory.remove_item(item_id)
@@ -1274,12 +1533,23 @@ func collect_pending_item() -> void:
 		inventory_panel.close()
 	else:
 		inventory_panel.refresh(appraisal.known)
-		inventory_panel.set_notice("仍然放不下：尝试旋转、调整位置，或丢弃其他晶石。")
+		inventory_panel.set_notice("仍然放不下：尝试旋转、调整位置，或丢弃其他物品。")
 
 func settle(emergency: bool) -> void:
 	if not on_moon:
 		return
 	_suspend_controls()
+	# Cargo, cash, exhibition income and the completed trip are committed together.
+	# A failed write leaves the live backpack intact for an explicit retry.
+	var result := progression.settle_expedition(trip_id, inventory.items.duplicate(true), emergency, trip_elapsed,
+		{"oxygen_grains": oxygen_grains, "oxygen_recovered": oxygen_recovered})
+	if not bool(result.get("ok", false)):
+		message = str(result.get("message", "回舱存档失败")) + " · 物品仍在背包，关闭背包后可重试回舱"
+		_sound("error")
+		if not inventory_open and not gm_open:
+			open_inventory()
+		inventory_panel.set_notice(message)
+		return
 	_sound("rescue" if emergency else "safe_extract")
 	pending_oxygen_grains = 0
 	pickup_count = 0.0
@@ -1287,52 +1557,10 @@ func settle(emergency: bool) -> void:
 	for item in fragments:
 		item.node.queue_free()
 	fragments.clear()
-	var sold_value := 0
-	receipt = "氧矿采集 %d 粒 · 本趟补氧 %.1f 秒\n" % [oxygen_grains, oxygen_recovered]
-	message = "紧急救援" if emergency else "安全回舱"
-	if not packed_specimens.is_empty():
-		if emergency:
-			message += "  ·  晶石遗落"
-			receipt += "%d 颗晶石遗落 · 未出售\n" % packed_specimens.size()
-		else:
-			var first_sale := not appraisal.known
-			var total_value := 0
-			var lines := ""
-			for index in range(inventory.items.size()):
-				var record: Dictionary = inventory.items[index]
-				appraisal.wear_percent = record.wear
-				appraisal.base_value = record.base_value
-				var value := appraisal.sale_value()
-				total_value += value
-				if index < 4:
-					lines += "%s %d × %d%% = %d\n" % [record.label, record.base_value, appraisal.integrity(), value]
-			sold_value = total_value
-			delivered_clusters += packed_specimens.size()
-			var save_error := appraisal.record_sale()
-			message += "  ·  %d 颗晶石售得 %d" % [packed_specimens.size(), total_value]
-			receipt += "首次鉴定 · 基础价已收录\n" if first_sale else "同类晶簇出售完成\n"
-			receipt += lines
-			if packed_specimens.size() > 4:
-				receipt += "另有 %d 颗已计入\n" % (packed_specimens.size() - 4)
-			receipt += "晶石合计 %d\n本趟总入账 %d" % [total_value, total_value]
-			if save_error != OK:
-				receipt += "\n图鉴保存失败，仅本次试玩记住估价"
-	if emergency and not appraisal.known:
-		receipt += "\n尚未成功出售，基础价仍未知"
-	var payout := sold_value
-	var net := payout - trip_fee
-	receipt = "本趟收入 %d · 门票 %d · 净收益 %+d\n%s" % [payout, trip_fee, net, receipt]
-	var report := {"text": receipt, "income": payout, "fee": trip_fee, "net": net,
-		"emergency": emergency, "zone": str(trip_zone.get("name", "月壤浅滩")),
-		"oxygen_grains": oxygen_grains, "oxygen_recovered": oxygen_recovered}
-	var meta_error := progression.settle_reward(payout, report)
-	if meta_error != OK:
-		if meta_error == ERR_INVALID_PARAMETER:
-			message += " · 本次收入超过存款上限，未入账"
-			receipt = "本次收入超过存款上限，未入账\n" + receipt
-		else:
-			message += " · 成长存档保存失败，收益暂留本次运行"
-			receipt += "\n成长存档保存失败，请勿退出后丢失本次收益"
+	receipt = str(result.get("report", {}).get("text", ""))
+	message = str(result.get("message", "已回到前哨站"))
+	var stored_count := int(result.get("stored", 0))
+	delivered_clusters += stored_count
 	carrying_cluster = false
 	terrain.clear_crystals()
 	for item in crystals:
@@ -1342,6 +1570,9 @@ func settle(emergency: bool) -> void:
 	crystal = null
 	nearest_signal = null
 	on_moon = false
+	trip_id = 0
+	trip_elapsed = 0.0
+	adventure_trial = false
 	oxygen = float(progression.stats().oxygen)
 	suit.position = LANDER + Vector3(1.1, 0, -0.4)
 	locomotion.reset(Input.is_physical_key_pressed(KEY_SPACE))
@@ -1350,7 +1581,7 @@ func settle(emergency: bool) -> void:
 	detector_panel.set_enabled(false)
 	update_hud()
 	if auto_open_base:
-		open_base()
+		show_outpost("lobby")
 	else:
 		_sync_touch_state()
 
@@ -1371,6 +1602,7 @@ func relative_bearing(point: Vector3) -> String:
 	return "向右转" if angle > 0 else "向左转"
 
 func update_hud() -> void:
+	hud_surface.visible = not base_open
 	var lander_distance := Vector2(suit.position.x - LANDER.x, suit.position.z - LANDER.z).length()
 	var return_seconds := ceili(maxf(0.0, lander_distance - HATCH_REACH) / walk_speed) + 1
 	var urgent := on_moon and oxygen <= return_seconds + 3
@@ -1381,15 +1613,15 @@ func update_hud() -> void:
 	oxygen_fill.bg_color = UI.DANGER if urgent else UI.ACCENT
 	return_hint.text = "回舱 %s · 约 %d 秒" % [relative_bearing(LANDER), return_seconds] if on_moon else "前哨站 · 氧气已补满"
 	return_hint.add_theme_color_override("font_color", UI.WARNING if urgent else UI.MUTED)
-	resource_line.text = "背包 %d/%d   补氧 +%.1fs" % [inventory.used_cells(), inventory.columns * inventory.rows, oxygen_recovered]
+	resource_line.text = "背包 %d/%d  补氧 %.1f/%.0fs" % [inventory.used_cells(), inventory.columns * inventory.rows, oxygen_recovered, oxygen_recovery_limit]
 	hint.text = "WASD 移动  ·  空格 跳跃  ·  H 按键"
 	help_card.visible = show_help and not inventory_open and not gm_open and not base_open
 	action_label.text = ""
 	if on_moon:
 		if suit.position.distance_to(LANDER) < HATCH_REACH:
-			action_label.text = "E  返航出售"
+			action_label.text = "E  返航入库"
 		elif crystal != null and crystal.is_loose() and suit.position.distance_to(crystal.position) <= 1.85:
-			action_label.text = "F  收集晶石"
+			action_label.text = "F  拾取 " + crystal.item_name
 		elif cursor.visible:
 			action_label.text = "长按左键  开采"
 	else:
@@ -1425,7 +1657,7 @@ func update_specimen_card() -> void:
 	else:
 		specimen_info.text = "暴露 %d%% / 80%%\n" % roundi(crystal.exposure_ratio * 100)
 	specimen_info.text += "磨损 %d%%\n" % appraisal.wear_percent if cluster_inspected else "%s\n" % appraisal.condition_name()
-	if not appraisal.known:
+	if not appraisal.is_known(crystal.item_type):
 		specimen_info.text += "售价 ？"
 	elif not cluster_inspected:
 		specimen_info.text += "估价待检查"
@@ -1483,16 +1715,18 @@ func update_fragments(delta: float) -> void:
 func gain_oxygen(grains: int) -> float:
 	if not on_moon or grains <= 0:
 		return 0.0
-	var restored := minf(float(grains) * OXYGEN_PER_GRAIN, maxf(0.0, oxygen_limit - oxygen))
+	var allowance := maxf(0.0, oxygen_recovery_limit - oxygen_recovered)
+	var restored := minf(minf(float(grains) * OXYGEN_PER_GRAIN, maxf(0.0, oxygen_limit - oxygen)), allowance)
 	oxygen = minf(oxygen_limit, oxygen + restored)
 	oxygen_grains += grains
 	_sound("oxygen_pickup")
 	oxygen_recovered += restored
-	pickup_count += restored
 	pickup_time = 1.1
-	if pickup_count > 0.0:
+	if restored > 0.0:
+		pickup_count += restored
 		pickup_label.text = ("+%.2f 秒氧气" if pickup_count < 0.1 else "+%.1f 秒氧气") % pickup_count
 	else:
-		pickup_label.text = "氧气已满"
+		pickup_count = 0.0
+		pickup_label.text = "补氧额度已用尽" if allowance <= 0.00001 else "氧气已满"
 	pickup_label.reset_size()
 	return restored

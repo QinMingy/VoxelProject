@@ -21,6 +21,7 @@ func run() -> void:
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 	game = Main.new()
 	game.progression = Main.Progression.new("")
+	game.progression.levels.excavation_range = 3
 	game.progression.bank = 0
 	game.auto_open_base = false
 	game.appraisal = Appraisal.new("")
@@ -72,7 +73,7 @@ func run() -> void:
 		"renderer": RenderingServer.get_video_adapter_name(),
 		"resolution": str(root.get_visible_rect().size),
 		"map_m": Main.Terrain.HALF_EXTENT * 2.0,
-		"activity_radius_m": Main.ActivityBoundary.RADIUS,
+		"activity_radius_m": game.activity_boundary.radius,
 		"crystals": game.crystals.size(),
 		"frames": frames.size(),
 		"mean_ms": sum / frames.size(),

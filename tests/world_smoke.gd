@@ -40,11 +40,13 @@ func run() -> void:
 	var began := Time.get_ticks_usec()
 	var game := Main.new()
 	game.progression = Main.Progression.new("")
+	game.progression.levels.excavation_range = 3
 	game.progression.bank = 0
 	game.auto_open_base = false
 	game.appraisal = Appraisal.new("")
 	game.wants_mouse_capture = false
 	root.add_child(game)
+	require(game.activity_boundary.radius == 26.0, "full-range fixture covers the previous maximum map")
 	game.set_process(false)
 	game.set_physics_process(false)
 	var terrain: Node3D = game.terrain
@@ -123,10 +125,16 @@ func run() -> void:
 	var buried_count := 0
 	for item: Crystal in game.crystals:
 		require(absf(item.position.x) < Terrain.HALF_EXTENT and absf(item.position.z) < Terrain.HALF_EXTENT, "specimen is inside map")
-		require(Vector2(item.position.x, item.position.z).length() < Main.ActivityBoundary.RADIUS - 1.0, "specimen is safely inside circular play boundary")
+		require(Vector2(item.position.x, item.position.z).length() < game.activity_boundary.radius - 1.0, "specimen is safely inside circular play boundary")
 		var bounds := item.get_local_bounds()
 		require(item.position.y + bounds.position.y > Terrain.DIG_LIMIT * Terrain.CELL_SIZE, "specimen can be excavated above protected bedrock")
-		require(is_equal_approx(bounds.size.y, [4.0, 5.0, 6.0][item.size_tier] * Terrain.CELL_SIZE), "three specimen heights occupy exactly four, five or six terrain cells")
+		if item.item_type == "crystal":
+			require(is_equal_approx(bounds.size.y, [4.0, 5.0, 6.0][item.size_tier] * Terrain.CELL_SIZE), "three crystal heights occupy exactly four, five or six terrain cells")
+		else:
+			require(item.item_type in ["chest", "shield", "hammer"] and not item.get_world_cells().is_empty(), "adventure specimens use a known type and an occupied voxel shape")
+			require(bounds.size.x >= Terrain.CELL_SIZE and bounds.size.y >= Terrain.CELL_SIZE and bounds.size.z >= Terrain.CELL_SIZE and maxf(bounds.size.x, maxf(bounds.size.y, bounds.size.z)) <= 1.5, "rotated adventure relics have finite voxel bounds within their source-size budget")
+			for extent in [bounds.size.x, bounds.size.y, bounds.size.z]:
+				require(is_equal_approx(extent / Terrain.CELL_SIZE, roundf(extent / Terrain.CELL_SIZE)), "adventure relic bounds remain aligned to terrain-sized voxels")
 		if not item.is_exposed(terrain):
 			buried_count += 1
 			buried = item
@@ -159,6 +167,9 @@ func run() -> void:
 	require(buried.is_exposed(terrain) and buried.is_loose(), "fully buried specimen can be uncovered and released")
 	var final_stats: Dictionary = terrain.debug_stats()
 	print("WORLD_OK map=64m deterministic=true relief=%.2fm crystals=%d buried=%d fine_chunks=%d max_chunk_ms=%.2f elapsed_ms=%.2f" % [first_heights.max() - first_heights.min(), game.crystals.size(), buried_count, final_stats.fine_chunks, final_stats.max_build_usec / 1000.0, (Time.get_ticks_usec() - began) / 1000.0])
+	game.sfx.set_muted(true)
+	await create_timer(0.1, true).timeout
 	game.queue_free()
 	await process_frame
+	await create_timer(0.25, true).timeout
 	quit(1 if test_failed else 0)

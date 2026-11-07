@@ -162,6 +162,7 @@ func shot(game: Node3D, label: String) -> void:
 func test_main() -> void:
 	var game := Main.new()
 	game.progression = Main.Progression.new("")
+	game.progression.levels.excavation_range = 3
 	game.progression.bank = 0
 	game.auto_open_base = false
 	game.appraisal = Main.Appraisal.new("")
@@ -170,6 +171,7 @@ func test_main() -> void:
 	game.set_process(false)
 	game.set_physics_process(false)
 	game.start_trip(false)
+	check(game.activity_boundary.radius == 26.0, "full-range fixture preserves the largest jump boundary")
 	game.suit.position = Main.LANDER + Vector3(1.3, 0.0, 0.0)
 	game.suit.position.y = game.terrain.height_at(game.suit.position.x, game.suit.position.z)
 	game.locomotion.reset()
@@ -242,7 +244,7 @@ func test_main() -> void:
 	game.start_trip(false)
 	check(game.on_moon and game.locomotion.vertical_speed == 0.0, "new departure starts with clean jump state")
 	for direction in [Vector3.RIGHT, Vector3.LEFT, Vector3.FORWARD, Vector3.BACK]:
-		game.suit.position = direction * (Main.ActivityBoundary.RADIUS - 0.5)
+		game.suit.position = direction * (game.activity_boundary.radius - 0.5)
 		game.suit.position.y = game.terrain.height_at(game.suit.position.x, game.suit.position.z) + 0.4
 		game.locomotion.reset()
 		for frame in range(90):
@@ -251,8 +253,12 @@ func test_main() -> void:
 		for frame in range(90):
 			game.move_suit(direction, STEP, true)
 			game._process(STEP)
-			check(Vector2(game.suit.position.x, game.suit.position.z).length() <= Main.ActivityBoundary.RADIUS - Main.ActivityBoundary.PLAYER_MARGIN + 0.001, "jump cannot bypass circular map boundary")
+			check(Vector2(game.suit.position.x, game.suit.position.z).length() <= game.activity_boundary.radius - Main.ActivityBoundary.PLAYER_MARGIN + 0.001, "jump cannot bypass circular map boundary")
 	press_space(false)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	game.free()
+	game.sfx.set_muted(true)
+	await create_timer(0.1, true).timeout
+	game.queue_free()
+	await process_frame
+	await create_timer(0.25, true).timeout
 	print("JUMP_MAIN_OK captured_space_input=", "passed" if native_input else "requires_native", " menu_resume_no_latent_jump=true gm_return_reset=true settle_reset=true deploy_reset=true boundary=true preview=", preview)

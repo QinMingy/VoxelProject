@@ -1,6 +1,7 @@
 extends Node3D
 
 const Terrain = preload("res://terrain.gd")
+const VoxelModel = preload("res://voxel_model.gd")
 const CELL_SIZE := Terrain.CELL_SIZE
 const RELEASE_EXPOSURE := 0.80
 const LIFT_STEPS := 3
@@ -19,6 +20,7 @@ const WEAR_SHADER := """
 shader_type spatial;
 render_mode diffuse_burley, specular_schlick_ggx;
 uniform float wear : hint_range(0.0, 1.0) = 0.0;
+uniform float mineral_glow : hint_range(0.0, 1.0) = 1.0;
 varying vec3 mineral_position;
 
 float hash_at(vec3 p) {
@@ -50,7 +52,7 @@ void fragment() {
 	ROUGHNESS = mix(0.38, 0.96, mask);
 	METALLIC = mix(0.18, 0.015, mask);
 	SPECULAR = mix(0.55, 0.16, mask);
-	EMISSION = vec3(0.27, 0.10, 0.44) * mix(0.24, 0.015, mask);
+	EMISSION = vec3(0.27, 0.10, 0.44) * mix(0.24, 0.015, mask) * mineral_glow;
 }
 """
 
@@ -66,6 +68,11 @@ var collected := false
 var size_tier := 1
 var footprint := Vector2i(1, 2)
 var size_label := "中型晶石"
+var item_type := "crystal"
+var item_name := "中型晶石"
+var icon_color := Color("#b875ed")
+var source_rotation := Vector3.ZERO
+var voxel_diagnostics: Dictionary = {}
 var base_value := 400
 var exposure_ratio := 0.0
 var extraction_ready := false
@@ -197,13 +204,44 @@ static func _make_outline(mesh: ArrayMesh, corner_normals: Dictionary) -> ArrayM
 	return outline
 
 func _apply_tier(tier: int) -> void:
+	item_type = "crystal"
+	source_rotation = Vector3.ZERO
+	voxel_diagnostics = {}
 	size_tier = clampi(tier, 0, 2)
 	footprint = FOOTPRINTS[size_tier]
 	base_value = BASE_VALUES[size_tier]
 	size_label = SIZE_NAMES[size_tier]
+	item_name = size_label
+	icon_color = Color("#b875ed")
+	_crystal_material.set_shader_parameter("mineral_glow", 1.0)
 	_geometry = _geometry_for(size_tier)
 	_mesh_instance.mesh = _geometry.mesh
 	_outline_instance.mesh = _geometry.outline
+
+func setup_adventure(scene: PackedScene, definition: Dictionary, orientation: Vector3, surface_y: float, burial_depth: float) -> bool:
+	_release_occupancy()
+	var quarter_turns := Vector3i(roundi(orientation.x / (PI * 0.5)), roundi(orientation.y / (PI * 0.5)), roundi(orientation.z / (PI * 0.5)))
+	var sampled := VoxelModel.sample_orthogonal_scene(scene, quarter_turns, float(definition.get("size", 1.0)))
+	if sampled.is_empty() or sampled.get("cells", []).is_empty():
+		return false
+	_geometry = sampled
+	_mesh_instance.mesh = _geometry.mesh
+	_outline_instance.mesh = _geometry.outline
+	item_type = str(definition.id)
+	item_name = str(definition.label)
+	size_label = item_name
+	footprint = definition.get("footprint", Vector2i(2, 2))
+	base_value = int(definition.get("value", 400))
+	icon_color = definition.get("color", Color("#cda36b"))
+	_crystal_material.set_shader_parameter("mineral_glow", 0.0)
+	source_rotation = Vector3(posmod(quarter_turns.x, 4), posmod(quarter_turns.y, 4), posmod(quarter_turns.z, 4)) * (PI * 0.5)
+	voxel_diagnostics = sampled.get("diagnostics", {})
+	# Quarter-turns permute the canonical cells exactly; the owner always stays on the world grid.
+	var requested := global_position
+	requested.y = surface_y - burial_depth - get_local_bounds().end.y
+	global_transform = Transform3D(Basis.IDENTITY, _origin_position(_origin_cell(requested)))
+	_reset_site_state()
+	return true
 
 func set_wear(wear: float) -> void:
 	_wear = clampf(wear, 0.0, 1.0)
@@ -272,7 +310,7 @@ func _reset_site_state() -> void:
 	inspected = false
 	exposure_ratio = 0.0
 	extraction_ready = false
-	release_hint = "继续清理晶石周围的土"
+	release_hint = "继续清理物品周围的土"
 	grips_remaining = GRIP_COUNT
 	_model.transform = Transform3D.IDENTITY
 	_outline_instance.hide()
@@ -309,7 +347,7 @@ func refresh_exposure(terrain: Node) -> void:
 	inspected = inspected or exposure_ratio >= 0.25
 	grips_remaining = maxi(1, ceili((RELEASE_EXPOSURE - exposure_ratio) / RELEASE_EXPOSURE * GRIP_COUNT))
 	if exposure_ratio < RELEASE_EXPOSURE:
-		release_hint = "继续清理晶石周围的土"
+		release_hint = "继续清理物品周围的土"
 		return
 	var owner_id := get_instance_id()
 	for cell: Vector3i in _geometry.cells:
@@ -348,7 +386,8 @@ func show_carried(_suit: Node3D) -> void:
 func drop_at(surface_point: Vector3) -> bool:
 	if not _carried or not is_instance_valid(_terrain):
 		return false
-	var requested := _origin_cell(surface_point)
+	# Rotated source shapes can extend below their local origin; put their lowest row above ground.
+	var requested := _origin_cell(surface_point) - Vector3i(0, floori(get_local_bounds().position.y / CELL_SIZE), 0)
 	for radius in range(DROP_HORIZONTAL_STEPS + 1):
 		for dx in range(-radius, radius + 1):
 			for dz in range(-radius, radius + 1):

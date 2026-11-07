@@ -1,0 +1,29 @@
+GIMP Palette
+Name: Moon Voxel Sprite v1
+Columns: 4
+# Locked base/albedo palette. Lighting output and font antialiasing are exempt.
+ 16  28  42	ink
+ 41  51  70	deep_slate
+ 70  81 107	slate
+ 99 115 143	moon_blue
+138 146 162	dust
+185 194 206	pale_stone
+226 222 206	bone
+255 242 220	cream
+106  61  43	rust_shadow
+173  97  52	rust
+238 164  82	amber
+255 210 155	amber_light
+ 25  75  89	teal_shadow
+ 45 130 144	teal
+ 98 201 199	cyan
+182 241 224	cyan_light
+ 68  52  95	violet_shadow
+120  81 169	violet
+184 117 237	crystal
+228 185 255	crystal_light
+ 99  60  71	rose_shadow
+183  96  98	warning_rose
+215 154 134	skin_shadow
+242 198 165	skin
+

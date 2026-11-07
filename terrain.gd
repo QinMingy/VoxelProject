@@ -37,6 +37,10 @@ const ORE_HIGHLIGHT := Color("#93fff0")
 enum Brush { BOWL, DISK, PUNCH }
 
 var last_removed := 0
+# Zero keeps standalone terrain tools unrestricted. The game snapshots the
+# permitted radius on deployment; distant ground remains scenery outside it.
+var activity_radius := 0.0
+var mining_radius := 0.45
 var oxygen_supply_density := 0.25
 var _map_oxygen_supply_density := 0.25
 var cleanup_enabled := true
@@ -332,7 +336,7 @@ func claim_crystal(owner_id: int, world_cells: Array[Vector3i]) -> bool:
 	# an existing owner's shape. Another crystal must never be partially erased.
 	var unique := {}
 	for cell: Vector3i in world_cells:
-		if not _in_bounds(cell.x, cell.z) or cell.y < 0 or cell.y >= LAYER_COUNT:
+		if not _in_bounds(cell.x, cell.z) or cell.y < 0 or cell.y >= LAYER_COUNT or not is_activity_cell(cell):
 			return false
 		var existing := crystal_owner_at(cell)
 		if existing != 0 and existing != owner_id:
@@ -426,7 +430,7 @@ func _clear_fragment_tasks() -> void:
 
 
 func _queue_fragment_seed(cell: Vector3i) -> void:
-	if not cleanup_enabled or not _in_bounds(cell.x, cell.z) or cell.y < DIG_LIMIT - BOTTOM_LEVEL or cell.y >= LAYER_COUNT:
+	if not cleanup_enabled or not _in_bounds(cell.x, cell.z) or cell.y < DIG_LIMIT - BOTTOM_LEVEL or cell.y >= LAYER_COUNT or not is_activity_cell(cell):
 		return
 	if not _cleanup_queued.has(cell):
 		_cleanup_queued[cell] = true
@@ -492,6 +496,9 @@ func _inspect_fragment(seed: Vector3i, threshold: int) -> Dictionary:
 	var index := 0
 	while index < members.size():
 		var cell: Vector3i = members[index]
+		# The playable edge is an anchor too: cleanup must not erase scenery.
+		if not is_activity_cell(cell):
+			return {"members": members, "remove": false, "visited": visits}
 		# World edges and unmineable bottom layers are anchors, never debris.
 		if cell.x == 0 or cell.z == 0 or cell.x == GRID_SIZE - 1 or cell.z == GRID_SIZE - 1 or cell.y < DIG_LIMIT - BOTTOM_LEVEL or cell.y == LAYER_COUNT - 1:
 			return {"members": members, "remove": false, "visited": visits}
@@ -642,12 +649,17 @@ func _ray_hit(position: Vector3, normal: Vector3, cell: Vector3i) -> Dictionary:
 
 
 func brush_radius(brush: int) -> float:
+	var scale_factor := mining_radius / 0.45
 	match brush:
 		Brush.DISK:
-			return 0.60
+			return 0.60 * scale_factor
 		Brush.PUNCH:
-			return 0.29
-	return 0.45
+			return 0.29 * scale_factor
+	return mining_radius
+
+
+func set_mining_radius(value: float) -> void:
+	mining_radius = clampf(value, 0.45, 0.60) if is_finite(value) else 0.45
 
 
 func mine(x: float, z: float, brush: int = Brush.BOWL) -> int:
@@ -667,7 +679,8 @@ func mine_at(hit: Vector3, normal: Vector3, brush: int) -> int:
 	var extents := Vector3.ONE * radius
 	var rounded := brush != Brush.DISK and brush != Brush.PUNCH
 	if not rounded:
-		var half_depth := (5.0 if brush == Brush.PUNCH else 1.0) * HALF_CELL
+		# Uniformly scale GM alternatives, preserving each brush's proportions.
+		var half_depth := (5.0 if brush == Brush.PUNCH else 1.0) * HALF_CELL * (mining_radius / 0.45)
 		center -= outward * half_depth
 		extents[axis] = half_depth
 	var first := _cell_at(center - extents).max(Vector3i(0, DIG_LIMIT - BOTTOM_LEVEL, 0))
@@ -677,6 +690,8 @@ func mine_at(hit: Vector3, normal: Vector3, brush: int) -> int:
 	var removed_cells: Array[Vector3i] = []
 	for z in range(first.z, last.z + 1):
 		for x in range(first.x, last.x + 1):
+			if not _inside_activity_column(x, z):
+				continue
 			var removed_in_column := false
 			for y in range(first.y, last.y + 1):
 				var cell := Vector3i(x, y, z)
@@ -707,6 +722,26 @@ func mine_at(hit: Vector3, normal: Vector3, brush: int) -> int:
 	for cell: Vector3i in removed_cells:
 		_queue_fragment_neighbors(cell)
 	return ore
+
+func set_activity_radius(value: float) -> void:
+	activity_radius = clampf(value, 0.0, HALF_EXTENT) if is_finite(value) else 0.0
+	_clear_fragment_tasks()
+
+func is_in_activity_area(point: Vector3, margin: float = 0.0) -> bool:
+	if not point.is_finite():
+		return false
+	return activity_radius <= 0.0 or Vector2(point.x, point.z).length_squared() <= pow(maxf(0.0, activity_radius - margin), 2.0)
+
+func is_activity_cell(cell: Vector3i) -> bool:
+	return _inside_activity_column(cell.x, cell.z)
+
+func _inside_activity_column(x: int, z: int) -> bool:
+	if activity_radius <= 0.0:
+		return true
+	# Include the furthest horizontal corner, not just the voxel's centre.
+	var far_x := absf(WORLD_MIN.x + (float(x) + 0.5) * CELL_SIZE) + HALF_CELL
+	var far_z := absf(WORLD_MIN.z + (float(z) + 0.5) * CELL_SIZE) + HALF_CELL
+	return far_x * far_x + far_z * far_z <= activity_radius * activity_radius + EPSILON
 
 
 func _cell_at(point: Vector3) -> Vector3i:
@@ -927,6 +962,7 @@ func _add_skirt(surface: SurfaceTool, x: int, z: int, side: int) -> void:
 
 func debug_stats() -> Dictionary:
 	return {"map_metres": HALF_EXTENT * 2.0, "fine_chunks": _chunks.size(),
+		"activity_radius": activity_radius,
 		"oxygen_supply_density": oxygen_supply_density, "map_oxygen_supply_density": _map_oxygen_supply_density,
 		"height_chunks": _height_chunks.size(), "modified_columns": _removed_columns.size(),
 		"crystal_cells": _crystal_cells.size(), "crystal_owners": _owner_cells.size(),

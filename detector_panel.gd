@@ -18,7 +18,7 @@ const CARDINALS := ["北", "东", "南", "西"]
 const RADAR_CENTER := Vector2(82.0, 134.0)
 const RADAR_RADIUS := 60.0
 
-var display_mode := Mode.COMPASS
+var display_mode := Mode.CIRCLE
 var _reading: Dictionary = {}
 var _markers: Array[Dictionary] = []
 var _enabled := false
@@ -40,7 +40,7 @@ func _ready() -> void:
 	theme = UI.theme()
 	_background = UI.panel()
 	_title_label = _label(UI.TEXT)
-	_title_label.text = "晶石探测"
+	_title_label.text = "宝物探测"
 	_tier_label = _label(UI.MUTED)
 	_tier_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_front_label = _label(UI.MUTED)
@@ -129,10 +129,10 @@ func _update_labels() -> void:
 	var nearest_distance := float(_reading.get("horizontal_distance_m", 0.0))
 	_front_label.visible = circle
 	_caption_label.visible = circle
-	_tier_label.text = ("Lv.%d  ·  %d m" % [level, range_m]) if circle else ("Lv.%d  ·  %d 颗  ·  %d m" % [level, count, range_m])
-	_caption_label.text = "最近晶石 · %d 颗" % count
+	_tier_label.text = ("Lv.%d  ·  %d m" % [level, range_m]) if circle else ("Lv.%d  ·  %d 件  ·  %d m" % [level, count, range_m])
+	_caption_label.text = "附近宝物 · %d 件" % count
 	if not available:
-		_echo_label.text = "无晶石"
+		_echo_label.text = "无目标"
 	else:
 		_echo_label.text = ("%.1f m" if circle else "最近 %.1f m") % nearest_distance
 	_echo_label.add_theme_color_override("font_color", UI.ACCENT if available else UI.MUTED)
@@ -157,7 +157,9 @@ func _circle_offset(marker: Dictionary) -> Vector2:
 	var bearing := float(marker.get("bearing_radians", 0.0))
 	var distance := float(marker.get("horizontal_distance_m", 0.0))
 	var range_m := maxf(0.01, float(_reading.get("range_m", 10.0)))
-	var radius := lerpf(14.0, 54.0, clampf(distance / range_m, 0.0, 1.0))
+	# A target directly below the player belongs at the centre, too. A minimum
+	# drawing radius would invent an offset and make precise alignment impossible.
+	var radius := 54.0 * clampf(distance / range_m, 0.0, 1.0)
 	return Vector2(sin(bearing), -cos(bearing)) * radius
 
 func _compass_x(bearing: float) -> float:
@@ -275,11 +277,15 @@ func _draw_circle() -> void:
 		var opacity := (1.0 - pulse) * (0.14 + 0.27 * _strength)
 		draw_arc(RADAR_CENTER, lerpf(10.0, RADAR_RADIUS, pulse), 0.0, TAU, 52, Color(UI.ACCENT, opacity), 1.5, true)
 	_draw_markers()
-	draw_colored_polygon(PackedVector2Array([
-		RADAR_CENTER + Vector2(0.0, -5.0),
-		RADAR_CENTER + Vector2(4.5, 4.0),
-		RADAR_CENTER + Vector2(-4.5, 4.0),
-	]), Color.WHITE)
+	# Outline preserves the player heading without covering an overlapping echo.
+	var arrow := PackedVector2Array([
+		RADAR_CENTER + Vector2(0.0, -6.0),
+		RADAR_CENTER + Vector2(5.0, 4.5),
+		RADAR_CENTER + Vector2(-5.0, 4.5),
+		RADAR_CENTER + Vector2(0.0, -6.0),
+	])
+	draw_polyline(arrow, Color("#0b1623"), 4.0, true)
+	draw_polyline(arrow, Color.WHITE, 1.6, true)
 
 func _draw_markers() -> void:
 	var font := get_theme_default_font()

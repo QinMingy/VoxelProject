@@ -86,16 +86,16 @@ func run() -> void:
 	await click(control("start_trial"))
 	await process_frame
 	check(game.on_moon and paused and is_equal_approx(game.oxygen, 24.0), "UI starts short trip while keeping world paused")
-	check(game.radar_mode == Main.DetectorPanel.Mode.COMPASS, "default radar is compass")
+	check(game.radar_mode == Main.DetectorPanel.Mode.CIRCLE and game.detector_panel.display_mode == game.radar_mode, "default radar is the circular mode")
 	var echo_ids: Array = game.detector_reading.get("echoes", []).map(func(echo: Dictionary): return echo.id)
 	var radar_oxygen: float = game.oxygen
-	await click(control("RadarMode1"))
-	check(game.radar_mode == Main.DetectorPanel.Mode.CIRCLE and game.detector_panel.display_mode == game.radar_mode, "real GM button switches to circular radar")
-	check(control("RadarMode1").button_pressed and not control("RadarMode0").button_pressed, "GM radar buttons are mutually exclusive")
-	check(game.oxygen_card.position.y == 24.0, "circle restores original corner layout")
-	check(game.oxygen == radar_oxygen and game.detector_reading.get("echoes", []).map(func(echo: Dictionary): return echo.id) == echo_ids, "switching radar preserves oxygen and scan targets")
 	await click(control("RadarMode0"))
-	check(game.radar_mode == Main.DetectorPanel.Mode.COMPASS and game.oxygen_card.position.y == 144.0, "compass mode reserves top centre space")
+	check(game.radar_mode == Main.DetectorPanel.Mode.COMPASS and game.detector_panel.display_mode == game.radar_mode, "real GM button switches to the compass strip")
+	check(control("RadarMode0").button_pressed and not control("RadarMode1").button_pressed, "GM radar buttons are mutually exclusive")
+	check(game.oxygen_card.position.y == 144.0, "compass mode reserves top centre space")
+	check(game.oxygen == radar_oxygen and game.detector_reading.get("echoes", []).map(func(echo: Dictionary): return echo.id) == echo_ids, "switching radar preserves oxygen and scan targets")
+	await click(control("RadarMode1"))
+	check(game.radar_mode == Main.DetectorPanel.Mode.CIRCLE and game.oxygen_card.position.y == 24.0, "circle restores original corner layout")
 	var oxygen_before: float = game.oxygen
 	var suit_before: Vector3 = game.suit.position
 	await create_timer(0.15).timeout
@@ -199,6 +199,11 @@ func run() -> void:
 		check(root.get_mouse_position().distance_to(root.get_visible_rect().get_center()) <= 1.0, "GM capture restores centred mouse")
 	game.wants_mouse_capture = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	game.sfx.set_muted(true)
+	await create_timer(0.10, true).timeout
+	game.queue_free()
+	await process_frame
+	await create_timer(0.25, true).timeout
 	if not test_failed:
 		print("GM_INTEGRATION_OK hotkey/corner-click/threshold9/pause/brush/oxygen/capture/inventory")
 	quit(1 if test_failed else 0)

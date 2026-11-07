@@ -95,12 +95,17 @@ func run() -> void:
 	require(game.packed_specimens == [25, 50], "later model or appraisal changes do not change packed prices")
 	game.settle(false)
 	game.update_hud()
-	require(game.bank == 500, "only the independently priced 300 and 200 crystals are credited")
+	require(game.bank == 0 and game.progression.museum_state.warehouse.size() == 2 and not game.appraisal.known, "safe return retains the two unidentified specimens without selling them")
+	var warehouse: Array = game.progression.museum_state.warehouse.duplicate(true)
+	require(warehouse[0].wear == 25 and warehouse[1].wear == 50, "persistent specimens retain their individual conditions")
+	for stored: Dictionary in warehouse:
+		game.on_museum_sell(int(stored.uid))
+	require(game.bank == 500 and game.progression.museum_state.warehouse.is_empty(), "only explicitly selling the independently priced 300 and 200 crystals credits cash")
 	require(game.delivered_clusters == 2, "both specimens counted as delivered")
 	require(game.appraisal.known and game.appraisal.last_sale == 200, "safe sale identifies type and remembers latest specimen")
 	game.sync_base_state()
-	require(game.base_panel._receipt.tooltip_text.contains("400 × 75% = 300"), "base receipt detail exposes first item's multiplier")
-	require(game.base_panel._receipt.tooltip_text.contains("400 × 50% = 200"), "base receipt detail exposes second item's own multiplier")
+	require(roundi(float(warehouse[0].base_value) * (100 - int(warehouse[0].wear)) / 100.0) == 300, "first warehouse item's fixed value is 400 x 75 percent")
+	require(roundi(float(warehouse[1].base_value) * (100 - int(warehouse[1].wear)) / 100.0) == 200, "second warehouse item's fixed value is 400 x 50 percent")
 	require(game.packed_specimens.is_empty() and game.carried_crystals.is_empty(), "settlement clears cargo")
 	var reloaded := Appraisal.new(TEST_SAVE)
 	reloaded.load_catalogue()
@@ -126,7 +131,7 @@ func run() -> void:
 	known_sample.refresh_exposure(game.terrain)
 	game.update_crystal_targets()
 	require(known_sample.wear_percent == fixed_wear, "digging and target refresh never reroll wear")
-	game.appraisal.reset_catalogue()
+	game.reset_appraisal_catalogue()
 	release_cluster(game, known_sample)
 	release_cluster(game, game.crystals[1])
 	game.oxygen = 1.0
@@ -141,7 +146,10 @@ func run() -> void:
 	after_reset.load_catalogue()
 	require(not after_reset.known, "GM catalogue reset persists")
 	DirAccess.remove_absolute(TEST_SAVE)
+	game.sfx.set_muted(true)
+	await create_timer(0.10, true).timeout
 	game.queue_free()
 	await process_frame
+	await create_timer(0.25, true).timeout
 	print("APPRAISAL_OK two_real_pickups=300+200 oxygen_grains=10 bank=500 rescue=0 catalogue=reload/reset independent_wear=true")
 	quit(1 if test_failed else 0)

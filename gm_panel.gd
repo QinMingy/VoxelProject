@@ -9,12 +9,13 @@ signal performance_changed(enabled: bool)
 signal radar_mode_selected(index: int)
 signal touch_mode_changed(enabled: bool)
 signal audio_enabled_changed(enabled: bool)
+signal technology_requested(action: String, upgrade_id: String, value: int)
 
 const UI = preload("res://ui_style.gd")
 const DEFAULT_CLEANUP_MAX_CELLS := 9
 const BRUSH_NAMES := ["球形", "宽铲", "窄钻"]
 const RADAR_MODES := ["方位条", "圆形盘"]
-const BASE_ACTIONS := ["start_trip", "start_trial", "reset_catalogue"]
+const BASE_ACTIONS := ["start_trip", "start_trial", "adventure_trial", "reset_catalogue"]
 const MOON_ACTIONS := ["cleanup_nearby", "refill_oxygen"]
 const CLEANUP_HELP := "只清理格数达标的完整孤立土块。相连土层和晶石会保留。"
 
@@ -24,7 +25,7 @@ var _state: Dictionary = {
 	"cleanup_enabled": true,
 	"cleanup_max_cells": DEFAULT_CLEANUP_MAX_CELLS,
 	"brush": 0,
-	"radar_mode": 0,
+	"radar_mode": 1,
 	"touch_mode": false,
 	"audio_enabled": true,
 	"show_performance": false,
@@ -33,6 +34,10 @@ var _state: Dictionary = {
 	"mining_time": 0.0,
 	"cleanup_status": "等待清理任务",
 	"message": "",
+	"bank": 0,
+	"research_points": 0,
+	"technology_rows": [],
+	"debug_progression_allowed": false,
 }
 var _entry: Button
 var _modal: Control
@@ -47,6 +52,21 @@ var _message: Label
 var _brush_buttons: Array[Button] = []
 var _radar_buttons: Array[Button] = []
 var _action_buttons: Dictionary = {}
+var _window: PanelContainer
+var _runtime_scroll: ScrollContainer
+var _technology_scroll: ScrollContainer
+var _technology_fields: VBoxContainer
+var _technology_balance: Label
+var _technology_notice: Label
+var _technology_spins: Dictionary = {}
+var _technology_labels: Dictionary = {}
+var _technology_buttons: Array[Button] = []
+var _technology_current_levels: Dictionary = {}
+var _technology_ids: Array[String] = []
+var _technology_pending := false
+var _runtime_tab: Button
+var _technology_tab: Button
+var _active_tab := "runtime"
 
 
 func _init() -> void:
@@ -58,6 +78,8 @@ func _ready() -> void:
 	_build()
 	_sync_controls()
 	_modal.visible = is_open
+	get_viewport().size_changed.connect(_layout)
+	_layout()
 
 
 func open() -> void:
@@ -78,6 +100,7 @@ func close() -> void:
 		_cleanup_limit.apply()
 		_cleanup_limit.get_line_edit().release_focus()
 	is_open = false
+	_technology_pending = false
 	if is_instance_valid(_modal):
 		_modal.hide()
 		_sync_controls()
@@ -99,6 +122,7 @@ func sync_state(data: Dictionary) -> void:
 	_state.cleanup_max_cells = clampi(int(_state.cleanup_max_cells), 1, 64)
 	_state.brush = clampi(int(_state.brush), 0, BRUSH_NAMES.size() - 1)
 	_state.radar_mode = clampi(int(_state.radar_mode), 0, RADAR_MODES.size() - 1)
+	_technology_pending = false
 	if is_instance_valid(_modal):
 		_sync_controls()
 
@@ -124,6 +148,7 @@ func _build() -> void:
 	_modal.add_child(shade)
 
 	var panel := PanelContainer.new()
+	_window = panel
 	panel.name = "GMWindow"
 	_modal.add_child(panel)
 	panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
@@ -137,7 +162,7 @@ func _build() -> void:
 	var header := HBoxContainer.new()
 	header.name = "Header"
 	content.add_child(header)
-	var title := _label("采掘调试", 30, "Title")
+	var title := _label("GM 调试", 30, "Title")
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
 	var resume := _button("继续采掘", "CloseButton", close)
@@ -147,7 +172,19 @@ func _build() -> void:
 	_status = _label("", 18, "SessionStatus")
 	_status.add_theme_color_override("font_color", UI.ACCENT)
 	content.add_child(_status)
+	var tabs := HBoxContainer.new()
+	tabs.add_theme_constant_override("separation", 8)
+	content.add_child(tabs)
+	_runtime_tab = _button("采掘调试", "RuntimeDebugTab", _show_tab.bind("runtime"))
+	_runtime_tab.toggle_mode = true
+	_runtime_tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tabs.add_child(_runtime_tab)
+	_technology_tab = _button("科技调试", "TechnologyDebugTab", _show_tab.bind("technology"))
+	_technology_tab.toggle_mode = true
+	_technology_tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tabs.add_child(_technology_tab)
 	var scroll := ScrollContainer.new()
+	_runtime_scroll = scroll
 	scroll.name = "OptionsScroll"
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -161,6 +198,8 @@ func _build() -> void:
 	var right := _card(columns, "RuntimeActions")
 	_build_cleanup(left)
 	_build_actions(right)
+	_build_technology(content)
+	_show_tab(_active_tab)
 
 	_message = _label("", 18, "Message")
 	_message.add_theme_color_override("font_color", UI.WARNING)
@@ -174,6 +213,132 @@ func _build() -> void:
 	_entry.offset_top = -68
 	_entry.offset_right = -24
 	_entry.offset_bottom = -24
+
+func _layout() -> void:
+	if _window == null:
+		return
+	var available := get_viewport().get_visible_rect().size - Vector2(32, 32)
+	var dimensions := Vector2(minf(928, available.x), minf(660, available.y))
+	_window.offset_left = -dimensions.x * 0.5
+	_window.offset_right = dimensions.x * 0.5
+	_window.offset_top = -dimensions.y * 0.5
+	_window.offset_bottom = dimensions.y * 0.5
+
+func _build_technology(parent: VBoxContainer) -> void:
+	_technology_scroll = ScrollContainer.new()
+	_technology_scroll.name = "TechnologyScroll"
+	_technology_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_technology_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	parent.add_child(_technology_scroll)
+	var contents := _column(_technology_scroll, "TechnologyContents", 12)
+	contents.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_technology_notice = _label("直接修改当前存档；仅舱内可用。设置等级不扣费，科技归零保留资金和仓库物品。", 18, "TechnologyNotice")
+	_technology_notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_technology_notice.add_theme_color_override("font_color", UI.WARNING)
+	contents.add_child(_technology_notice)
+	_technology_balance = _label("", 20, "TechnologyBalance")
+	contents.add_child(_technology_balance)
+	var resources := HBoxContainer.new()
+	resources.add_theme_constant_override("separation", 8)
+	contents.add_child(resources)
+	resources.add_child(_technology_button("资金 +1000", "DebugCash1000", "grant_cash", "", 1000))
+	resources.add_child(_technology_button("资金 +10000", "DebugCash10000", "grant_cash", "", 10000))
+	resources.add_child(_technology_button("研究点 +10", "DebugResearch10", "grant_research", "", 10))
+	var bulk := HBoxContainer.new()
+	bulk.add_theme_constant_override("separation", 8)
+	contents.add_child(bulk)
+	bulk.add_child(_technology_button("全部科技归零", "DebugTechnologyReset", "reset_levels"))
+	bulk.add_child(_technology_button("全部科技满级", "DebugTechnologyMax", "max_levels"))
+	contents.add_child(HSeparator.new())
+	_technology_fields = _column(contents, "TechnologyLevels", 8)
+	_technology_fields.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+func _technology_button(text: String, node_name: String, action: String, id: String = "", value: int = 0) -> Button:
+	var button := _button(text, node_name, _request_technology.bind(action, id, value))
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_technology_buttons.append(button)
+	return button
+
+func _show_tab(tab: String) -> void:
+	_active_tab = tab if tab == "technology" else "runtime"
+	_runtime_scroll.visible = _active_tab == "runtime"
+	_technology_scroll.visible = _active_tab == "technology"
+	_runtime_tab.set_pressed_no_signal(_active_tab == "runtime")
+	_technology_tab.set_pressed_no_signal(_active_tab == "technology")
+
+func _sync_technology() -> void:
+	var rows: Array = _state.technology_rows
+	var ids: Array[String] = []
+	for row: Dictionary in rows:
+		ids.append(str(row.id))
+	if ids != _technology_ids:
+		_technology_ids = ids
+		for child in _technology_fields.get_children():
+			_technology_fields.remove_child(child)
+			child.queue_free()
+		_technology_spins.clear()
+		_technology_labels.clear()
+		_technology_current_levels.clear()
+		# The first five controls are resource grants and bulk operations.
+		_technology_buttons.resize(5)
+		for row: Dictionary in rows:
+			var id := str(row.id)
+			var line := HBoxContainer.new()
+			line.name = "Technology_" + id
+			line.add_theme_constant_override("separation", 12)
+			_technology_fields.add_child(line)
+			var label := _label("", 18, "TechnologyDescription_" + id)
+			label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			line.add_child(label)
+			_technology_labels[id] = label
+			var target := SpinBox.new()
+			target.name = "TechnologyLevel_" + id
+			target.min_value = 0
+			target.max_value = int(row.max_level)
+			target.step = 1
+			target.rounded = true
+			target.prefix = "Lv."
+			target.custom_minimum_size = Vector2(116, 44)
+			target.select_all_on_focus = true
+			line.add_child(target)
+			_technology_spins[id] = target
+			var apply := _button("设置等级", "DebugSetLevel_" + id, _request_level.bind(id))
+			apply.custom_minimum_size.x = 110
+			line.add_child(apply)
+			_technology_buttons.append(apply)
+	var available := not bool(_state.on_moon) and bool(_state.debug_progression_allowed) and not _technology_pending
+	for row: Dictionary in rows:
+		var id := str(row.id)
+		var spin: SpinBox = _technology_spins[id]
+		var level := int(row.level)
+		if int(_technology_current_levels.get(id, -1)) != level:
+			spin.set_value_no_signal(level)
+			_technology_current_levels[id] = level
+		spin.editable = available
+		(_technology_labels[id] as Label).text = "%s  ·  当前 Lv.%d / %d\n%s" % [str(row.name), level, int(row.max_level), str(row.current)]
+	for button in _technology_buttons:
+		button.disabled = not available or rows.is_empty()
+	_technology_balance.text = "资金 %d   ·   研究点 %d" % [int(_state.bank), int(_state.research_points)]
+	_technology_notice.text = "直接修改当前存档；设置等级不扣费，科技归零保留资金和仓库物品。"
+	if not bool(_state.debug_progression_allowed) or bool(_state.on_moon):
+		_technology_notice.text += "\n当前不可调整，请先安全返航并结算远征。"
+	elif _technology_pending:
+		_technology_notice.text += "\n正在保存……"
+
+func _request_level(id: String) -> void:
+	var spin: SpinBox = _technology_spins.get(id)
+	if spin == null:
+		return
+	spin.apply()
+	_request_technology("set_level", id, roundi(spin.value))
+
+func _request_technology(action: String, id: String = "", value: int = 0) -> void:
+	if not is_open or bool(_state.on_moon) or not bool(_state.debug_progression_allowed) or _technology_pending:
+		return
+	_technology_pending = true
+	_sync_technology()
+	technology_requested.emit(action, id, value)
 
 
 func _build_cleanup(parent: VBoxContainer) -> void:
@@ -282,6 +447,7 @@ func _build_actions(parent: VBoxContainer) -> void:
 	parent.add_child(_label("舱内测试", 22, "BaseTitle"))
 	parent.add_child(_action_button("开始新矿区", "start_trip"))
 	parent.add_child(_action_button("24 秒撤离试炼", "start_trial"))
+	parent.add_child(_action_button("冒险遗物试挖", "adventure_trial"))
 	parent.add_child(_action_button("重置估价图鉴", "reset_catalogue"))
 
 
@@ -316,6 +482,7 @@ func _sync_controls() -> void:
 	_message.text = str(_state.message)
 	_message.visible = not _message.text.is_empty()
 	_entry.text = "G  关闭" if is_open else "G  调试"
+	_sync_technology()
 	set_available(_available)
 
 
