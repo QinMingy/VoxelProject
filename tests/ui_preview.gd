@@ -1,6 +1,7 @@
 extends SceneTree
 
 const Main = preload("res://main.gd")
+const Palette = preload("res://palette.gd")
 const OUT := "res://.demo-data/ui-refresh"
 const DEFAULT_RESOLUTION := Vector2i(1100, 720)
 
@@ -56,14 +57,13 @@ func run() -> void:
 	check(game.outpost_page == "lobby" and paused, "title action opens the real paused lobby")
 	await shot("lobby")
 	game.show_outpost("museum")
-	check(game.museum_panel.is_open and paused and game.progression.museum_state.exhibits.is_empty(), "production museum opens empty for a new profile")
+	check(game.museum_panel.is_open and paused and game.progression.museum_state.items.is_empty(), "production museum opens empty for a new profile")
 	await shot("museum-empty")
 	_fill_museum()
 	game.show_outpost("museum")
-	check(game.progression.museum_state.exhibits.size() == 3 and game.progression.museum_state.warehouse.size() == 3, "visual museum fixture uses backend processing and leaves three real records unprocessed")
+	check(game.progression.museum_state.items.size() == Main.Progression.Museum.CATEGORIES.size() and game.progression.museum_summary().displayed_count == 6, "visual museum fixture owns every category with six displayed")
 	await shot("museum")
-	(game.museum_panel.find_child("CatalogueTab", true, false) as Button).pressed.emit()
-	game.museum_panel.select_exhibit("chest")
+	game.museum_panel.select_item("chest")
 	await shot("museum-catalogue")
 	(game.museum_panel.find_child("ResearchButton", true, false) as Button).pressed.emit()
 	check(game.outpost_page == "skills" and paused, "museum research opens the actual skill tree")
@@ -76,7 +76,7 @@ func run() -> void:
 	await shot("expeditions")
 	game.show_outpost("skills")
 	check(game.skill_tree_panel.is_open and not game.base_panel.is_open and paused, "skill tree is a separate paused page")
-	check(game.skill_tree_panel._nodes.size() == 28, "equipment and museum branches expose twenty-eight real tier nodes across two tabs")
+	check(game.skill_tree_panel._nodes.size() == 30, "equipment and museum branches expose thirty real tier nodes across two tabs")
 	var range_node := game.skill_tree_panel.find_child("Skill_excavation_range_1", true, false) as Button
 	check(range_node != null and range_node.is_visible_in_tree(), "exploration range has a visible real skill node")
 	range_node.pressed.emit()
@@ -95,15 +95,16 @@ func run() -> void:
 	await shot("skills-upgraded")
 	check(not game.skill_tree_panel._detail_values.text.is_empty(), "selected skill retains exact current and next statistics")
 	game.show_outpost("report")
-	check(str(game.outpost_panel._state.receipt) == game.receipt and paused, "separate report retains the full settlement data")
+	check(game.settlement_panel.is_open and paused, "separate settlement view retains the full report detail")
 	await shot("report")
+	game.settlement_panel.close()
 	check(game.progression.buy_upgrade("museum_capacity").ok and game.progression.buy_upgrade("museum_capacity").ok, "preview expands the museum using actual upgrade transactions")
-	var remaining: Array = game.progression.museum_state.warehouse.duplicate(true)
-	for record: Dictionary in remaining:
-		game.on_museum_donate(int(record.uid))
+	var keys: Array = game.progression.museum_state.items.keys()
+	for index in range(keys.size()):
+		game.on_museum_place(str(keys[index]), index)
 	game.sync_base_state()
 	game.show_outpost("museum")
-	check(game.progression.museum_state.exhibits.size() == 6 and game.progression.stats().museum_capacity == 6, "rich fixture opens all six real collected exhibit types and pedestals")
+	check(game.progression.museum_state.items.size() == Main.Progression.Museum.CATEGORIES.size() and game.progression.stats().museum_capacity == 24, "rich fixture opens all collected categories and pedestals")
 	await shot("museum-expanded")
 
 	game.start_trip(false)
@@ -129,14 +130,11 @@ func run() -> void:
 	check(game.crystal != null and game.crystal.visible, "normal HUD has an actual exposed crystal target")
 	check(game.cursor.visible, "normal HUD has an actual mineable ground hit")
 	await shot("hud-default-circle", true)
-	check(not game.detector_panel.get_global_rect().intersects(game.specimen_card.get_global_rect()), "default circle does not overlap specimen details")
 	game.set_radar_mode(Main.DetectorPanel.Mode.COMPASS)
-	check(not game.detector_panel.get_global_rect().intersects(game.specimen_card.get_global_rect()), "compass does not overlap specimen details")
 	check(not game.detector_panel.get_global_rect().intersects(game.oxygen_card.get_global_rect()), "compass does not overlap oxygen card")
 	await shot("hud", true)
 	game.set_radar_mode(Main.DetectorPanel.Mode.CIRCLE)
 	await shot("hud-circle", true)
-	check(not game.detector_panel.get_global_rect().intersects(game.specimen_card.get_global_rect()), "circular radar does not overlap specimen details")
 	game.set_radar_mode(Main.DetectorPanel.Mode.COMPASS)
 	game.show_help = true
 	game.update_hud()
@@ -302,22 +300,18 @@ func _fill_museum() -> void:
 	# Visual fixtures travel through the same validated ledger and registration
 	# operations as gameplay. Production starts empty; no invented gallery models.
 	var fixtures: Array[Dictionary] = [
-		{"item_type": "crystal", "label": "小型晶石", "item_name": "小型晶石", "footprint": Vector2i(1, 1), "wear": 8, "base_value": 180, "icon_color": Color("#b875ed")},
-		{"item_type": "crystal", "label": "中型晶石", "item_name": "中型晶石", "footprint": Vector2i(1, 2), "wear": 22, "base_value": 400, "icon_color": Color("#b875ed")},
-		{"item_type": "crystal", "label": "大型晶石", "item_name": "大型晶石", "footprint": Vector2i(2, 2), "wear": 5, "base_value": 760, "icon_color": Color("#b875ed")},
+		{"item_type": "crystal", "label": "小型晶石", "item_name": "小型晶石", "footprint": Vector2i(1, 1), "wear": 8, "base_value": 180, "icon_color": Palette.CRYSTAL},
+		{"item_type": "crystal", "label": "中型晶石", "item_name": "中型晶石", "footprint": Vector2i(1, 2), "wear": 22, "base_value": 400, "icon_color": Palette.CRYSTAL},
+		{"item_type": "crystal", "label": "大型晶石", "item_name": "大型晶石", "footprint": Vector2i(2, 2), "wear": 5, "base_value": 760, "icon_color": Palette.CRYSTAL},
 	]
 	for index in range(Main.AdventureItems.ITEMS.size()):
 		var definition: Dictionary = Main.AdventureItems.definition(index)
 		fixtures.append({"item_type": definition.id, "label": definition.label, "item_name": definition.label,
-			"footprint": definition.footprint, "wear": [15, 25, 40][index], "base_value": definition.value, "icon_color": definition.color})
+			"footprint": definition.footprint, "wear": [15, 25, 40][index % 3], "base_value": definition.value, "icon_color": definition.color})
 	var entry: Dictionary = game.progression.pay_entry("meadow", true)
 	check(entry.ok, "museum preview starts a free isolated fixture expedition")
 	var result: Dictionary = game.progression.settle_expedition(int(entry.trip_id), fixtures, false, 65.0)
 	check(result.ok, "museum preview deposits validated persistent cargo")
-	var records: Array = game.progression.museum_state.warehouse.duplicate(true)
-	for record: Dictionary in records:
-		if record.key in ["crystal_small", "chest", "shield"]:
-			game.on_museum_donate(int(record.uid))
 	game.sync_base_state()
 
 

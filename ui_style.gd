@@ -1,20 +1,26 @@
 extends RefCounted
 
-const TEXT := Color("#edf4fa")
-const MUTED := Color("#a8bacb")
-const ACCENT := Color("#75e8c5")
-const WARNING := Color("#ffb880")
-const DANGER := Color("#ff827c")
-const PANEL := Color("#101c2a")
-const BORDER := Color("#34495d")
+const Palette = preload("res://palette.gd")
+
+const TEXT := Palette.CREAM
+const MUTED := Palette.PALE_STONE
+const ACCENT := Palette.CYAN
+const WARNING := Palette.AMBER
+const DANGER := Palette.SKIN_SHADOW
+const PANEL := Palette.INK
+const BORDER := Palette.SLATE
 
 static func panel(fill: Color = PANEL, border: Color = BORDER,
-		padding: int = 16, radius: int = 12) -> StyleBoxFlat:
+		padding: int = 16, radius: int = 2) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 	style.bg_color = fill
 	style.border_color = border
-	style.set_border_width_all(1)
+	style.border_width_left = 1
+	style.border_width_right = 1
+	style.border_width_top = 1
+	style.border_width_bottom = 3
 	style.set_corner_radius_all(radius)
+	style.corner_detail = 2
 	style.content_margin_left = padding
 	style.content_margin_right = padding
 	style.content_margin_top = padding
@@ -28,15 +34,15 @@ static func theme() -> Theme:
 		result.set_color("font_color", kind, TEXT)
 	result.set_color("font_hover_color", "Button", TEXT)
 	result.set_color("font_pressed_color", "Button", TEXT)
-	result.set_color("font_disabled_color", "Button", Color("#8193a6"))
-	result.set_stylebox("normal", "Button", panel(Color("#213347"), BORDER, 10, 8))
-	result.set_stylebox("hover", "Button", panel(Color("#2c4658"), ACCENT, 10, 8))
-	result.set_stylebox("pressed", "Button", panel(Color("#244d48"), ACCENT, 10, 8))
-	result.set_stylebox("disabled", "Button", panel(Color("#182431"), Color("#293b4b"), 10, 8))
-	result.set_stylebox("focus", "Button", panel(Color(0, 0, 0, 0), ACCENT, 10, 8))
-	result.set_stylebox("normal", "LineEdit", panel(Color("#0a1420"), BORDER, 8, 6))
-	result.set_stylebox("focus", "LineEdit", panel(Color(0, 0, 0, 0), ACCENT, 8, 6))
-	result.set_stylebox("panel", "TooltipPanel", panel(PANEL, BORDER, 12, 8))
+	result.set_color("font_disabled_color", "Button", Palette.DUST)
+	result.set_stylebox("normal", "Button", panel(Palette.DEEP_SLATE, BORDER, 10, 2))
+	result.set_stylebox("hover", "Button", panel(Palette.SLATE, ACCENT, 10, 2))
+	result.set_stylebox("pressed", "Button", panel(Palette.TEAL_SHADOW, ACCENT, 10, 2))
+	result.set_stylebox("disabled", "Button", panel(Palette.INK, Palette.DEEP_SLATE, 10, 2))
+	result.set_stylebox("focus", "Button", panel(Color(0, 0, 0, 0), ACCENT, 10, 2))
+	result.set_stylebox("normal", "LineEdit", panel(Palette.INK, BORDER, 8, 2))
+	result.set_stylebox("focus", "LineEdit", panel(Color(0, 0, 0, 0), ACCENT, 8, 2))
+	result.set_stylebox("panel", "TooltipPanel", panel(PANEL, BORDER, 12, 2))
 	result.set_font_size("font_size", "TooltipLabel", 18)
 	result.set_color("font_color", "TooltipLabel", TEXT)
 	return result

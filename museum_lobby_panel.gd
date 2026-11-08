@@ -5,14 +5,16 @@ signal slot_requested(slot: int)
 
 const UI = preload("res://ui_style.gd")
 const LobbyScene = preload("res://museum_lobby.gd")
-const FLOOR := Color("#525e74")
-const ORANGE := Color("#eea452")
+const Palette = preload("res://palette.gd")
+const FLOOR := Palette.SLATE
+const ORANGE := Palette.AMBER
 
 var scene: LobbyScene
 var viewport: SubViewport
 var room_view: SubViewportContainer
 var utility_row: HBoxContainer
 var _active := false
+var _management_mode := false
 var _balance: Label
 var _notice: Label
 var _help: Label
@@ -68,11 +70,11 @@ func _build() -> void:
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.add_theme_constant_override("separation", 4)
 	header_row.add_child(title)
-	title.add_child(_label("月面展览馆", 28, Color("#fff1da")))
+	title.add_child(_label("月面展览馆", 28, Palette.CREAM))
 	var right := VBoxContainer.new()
 	right.add_theme_constant_override("separation", 8)
 	header_row.add_child(right)
-	_balance = _label("", 18, Color("#fff1da"))
+	_balance = _label("", 18, Palette.CREAM)
 	_balance.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	right.add_child(_balance)
 	var utilities := HBoxContainer.new()
@@ -97,7 +99,7 @@ func _build() -> void:
 	footer_row.add_child(space)
 	# Only exceptional save messages occupy this area; routine instructions
 	# stay in the optional help panel.
-	_notice = _label("", 16, Color("#ffd2a2"))
+	_notice = _label("", 16, Palette.AMBER_LIGHT)
 	_notice.name = "LobbySaveNotice"
 	_notice.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_notice.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -111,19 +113,19 @@ func _build() -> void:
 	footer_row.add_child(_actions)
 	_actions.add_child(_button("装备", "SkillsButton", func() -> void: navigate_requested.emit("skills")))
 	_warehouse_button = _button("仓库", "MuseumButton", func() -> void: navigate_requested.emit("museum"))
-	_warehouse_button.tooltip_text = "整理物品、出售、登记展品和调整陈列"
+	_warehouse_button.tooltip_text = "查看藏品经验、布展和调整陈列"
 	_actions.add_child(_warehouse_button)
 	_departure_button = _button("出发  →", "ExpeditionsButton", func() -> void: navigate_requested.emit("zones"))
-	_departure_button.add_theme_stylebox_override("normal", UI.panel(ORANGE, Color("#ffca7b"), 12, 6))
-	_departure_button.add_theme_stylebox_override("hover", UI.panel(Color("#ffc276"), Color("#ffe2a3"), 12, 6))
-	_departure_button.add_theme_stylebox_override("pressed", UI.panel(Color("#cf863d"), Color("#ffd59b"), 12, 6))
+	_departure_button.add_theme_stylebox_override("normal", UI.panel(ORANGE, Palette.AMBER_LIGHT, 12, 2))
+	_departure_button.add_theme_stylebox_override("hover", UI.panel(Palette.AMBER_LIGHT, Palette.AMBER_LIGHT, 12, 2))
+	_departure_button.add_theme_stylebox_override("pressed", UI.panel(Palette.AMBER, Palette.AMBER_LIGHT, 12, 2))
 	for state: String in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
-		_departure_button.add_theme_color_override(state, Color("#3e2c24"))
+		_departure_button.add_theme_color_override(state, Palette.RUST_SHADOW)
 	_actions.add_child(_departure_button)
-	_help = _label("", 18, Color("#fff1da"))
+	_help = _label("", 18, Palette.CREAM)
 	_help.name = "LobbyHelp"
 	_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_help.add_theme_stylebox_override("normal", UI.panel(Color("#283344"), Color("#7c8594"), 14, 6))
+	_help.add_theme_stylebox_override("normal", UI.panel(Palette.DEEP_SLATE, Palette.DUST, 14, 2))
 	_help.mouse_filter = Control.MOUSE_FILTER_STOP
 	_help.hide()
 	add_child(_help)
@@ -142,8 +144,8 @@ func _button(text: String, node_name: String, action: Callable, small: bool = fa
 	button.text = text
 	button.custom_minimum_size = Vector2(64, 34) if small else Vector2(138, 58)
 	button.add_theme_font_size_override("font_size", 16 if small else 24)
-	button.add_theme_stylebox_override("normal", UI.panel(Color("#354156"), Color("#748094"), 8 if small else 12, 6))
-	button.add_theme_stylebox_override("hover", UI.panel(Color("#45536a"), ORANGE, 8 if small else 12, 6))
+	button.add_theme_stylebox_override("normal", UI.panel(Palette.SLATE, Palette.DUST, 8 if small else 12, 2))
+	button.add_theme_stylebox_override("hover", UI.panel(Palette.SLATE, ORANGE, 8 if small else 12, 2))
 	button.pressed.connect(action)
 	return button
 
@@ -152,14 +154,14 @@ func sync_state(data: Dictionary) -> void:
 		return
 	var museum: Dictionary = data.get("museum", {})
 	scene.set_collection(museum)
-	var warehouse: Array = museum.get("warehouse", [])
+	var exhibits: Dictionary = museum.get("exhibits", {})
 	_balance.text = "资金 %d   ·   研究 %d" % [int(data.get("bank", 0)), int(data.get("research_points", 0))]
-	_warehouse_button.text = "仓库" if warehouse.is_empty() else "仓库 · %d" % warehouse.size()
+	_warehouse_button.text = "仓库" if exhibits.is_empty() else "仓库 · %d" % exhibits.size()
 	_touch_mode = bool(data.get("touch_mode", false))
 	var message := str(data.get("message", ""))
 	_notice.text = message if message.contains("存档") or message.contains("未入账") else ""
 	_notice.visible = not _notice.text.is_empty()
-	_help.text = "点击展台调整陈列；灰色展台可查看扩建。\n仓库：整理物品、登记展品和布展。\n装备：升级采掘能力；出发：选择矿区。"
+	_help.text = "点击展台调整陈列；灰色展台可查看扩建。\n仓库：查看藏品经验与布展。\n装备：升级采掘能力；出发：选择矿区。"
 	if not _touch_mode:
 		_help.text += "\nH 收起帮助 · Esc 返回开始页"
 
@@ -175,12 +177,29 @@ func set_active(value: bool) -> void:
 		_resize_scene.call_deferred()
 
 func toggle_help() -> void:
+	if _management_mode:
+		return
 	_help.visible = not _help.visible
 	# A visible explanation blocks the corresponding ground clicks.
 	scene.set_active(_active and not _help.visible)
 
+func set_management_mode(value: bool) -> void:
+	_management_mode = value
+	_header.visible = not value
+	_footer.visible = not value
+	if value:
+		_help.hide()
+	if scene != null:
+		scene.set_active(_active and not _help.visible)
+
 func _room_input(event: InputEvent) -> void:
 	if not _active or _help.visible or event.device == InputEvent.DEVICE_ID_EMULATION:
+		return
+	if event is InputEventMouseButton and (event.button_index == MOUSE_BUTTON_WHEEL_UP
+			or event.button_index == MOUSE_BUTTON_WHEEL_DOWN):
+		if event.pressed:
+			scene.adjust_zoom(-1.0 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0)
+			room_view.accept_event()
 		return
 	var pointer := Vector2.ZERO
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:

@@ -1,4 +1,5 @@
 extends Node3D
+const Palette = preload("res://palette.gd")
 
 var body: Node3D
 var left_leg: Node3D
@@ -8,11 +9,11 @@ var bit: MeshInstance3D
 var stride := 0.0
 var vibration := 0.0
 
-var shell := _material(Color("#e7e9d9"))
-var joint := _material(Color("#253841"))
-var trim := _material(Color("#ee9e56"))
-var glass := _material(Color("#183842"), 0.24, 0.42)
-var glow := _material(Color("#76e5df"), 0.38, 0.05, 0.48)
+var shell := _material(Palette.BONE)
+var joint := _material(Palette.DEEP_SLATE)
+var trim := _material(Palette.AMBER)
+var glass := _material(Palette.TEAL_SHADOW, 0.24, 0.42)
+var glow := _material(Palette.CYAN, 0.38, 0.05, 0.48)
 
 
 func _ready() -> void:

@@ -68,7 +68,7 @@ func run() -> void:
 		check(exterior_count == item._geometry.exterior.size(), "exposure denominator counts boundary faces, including repeated neighboring cells")
 		var original_price: int = item.base_value
 		uncover(item)
-		check(item.is_loose() and item._outline_instance.visible, "excavation exposes and outlines collectible prop")
+		check(item.is_loose() and item.wants_outline(), "excavation exposes and outlines collectible prop")
 		var cells: Array[Vector3i] = item.get_world_cells()
 		game.suit.position = item.position + Vector3(0.7, 0.4, 0.7)
 		check(game.collect_crystal(item), "whole prop goes into real grid inventory")
@@ -77,7 +77,7 @@ func run() -> void:
 		var record: Dictionary = game.inventory.get_item(item.get_instance_id())
 		check(record.item_type == item.item_type and record.item_name == item.item_name, "inventory preserves per-kind name and identity")
 		check(record.base_value == original_price and record.footprint == Items.ITEMS[index].footprint, "price and bag footprint use metadata, not rotated cell count")
-		check(not game.appraisal.is_known(item.item_type), "finding and collecting do not reveal first sale price")
+		check(game.appraisal.is_known(item.item_type), "item price is known without a separate identification step")
 		if index == 0:
 			var destination: Vector3 = Main.LANDER + Vector3(-2.0, 0, 0)
 			destination.y = game.terrain.height_at(destination.x, destination.z)
@@ -88,21 +88,13 @@ func run() -> void:
 			check(game.collect_crystal(item), "dropped prop can be picked up again")
 		results.append({"kind": item.item_type, "cells": cells.size(), "faces": exterior_count, "sampling": item.voxel_diagnostics})
 	check(game.inventory.items.size() == 3, "all three trial items fit in starter bag")
-	var expected_sale := 0
-	for record: Dictionary in game.inventory.items:
-		expected_sale += roundi(float(record.base_value) * (100 - int(record.wear)) / 100.0)
 	game.settle(false)
-	check(game.bank == 150 and game.progression.museum_state.warehouse.size() == 3, "safe return stores three real props without automatically converting them into money")
-	for definition: Dictionary in Items.ITEMS:
-		check(not game.appraisal.is_known(str(definition.id)), "mere warehouse arrival does not identify an unsold item")
-	var warehouse: Array = game.progression.museum_state.warehouse.duplicate(true)
-	for stored: Dictionary in warehouse:
-		check(not stored.has("world_id") and not stored.has("id"), "persistent props do not retain transient world instance IDs")
-		game.on_museum_sell(int(stored.uid))
-	for definition: Dictionary in Items.ITEMS:
-		check(game.appraisal.is_known(str(definition.id)), "explicit warehouse sale reveals each sold item type")
-	check(not game.appraisal.known, "selling adventures does not identify unrelated crystals")
-	check(game.bank == 150 + expected_sale and game.progression.museum_state.warehouse.is_empty(), "base economy receives exactly the explicitly sold props' proceeds")
+	if game.settlement_panel.is_open:
+		game.settlement_panel.close()
+	var archived := 0
+	for key: String in game.progression.museum_state.items:
+		archived += int(game.progression.museum_state.items[key].copies)
+	check(game.bank == 150 and archived == 3, "safe return archives three real props without automatically converting them into money")
 	game.progression.bank = 0
 	game.gm_panel.open()
 	check(paused and game.gm_open, "GM opens and pauses before testing the actual trial button")
@@ -110,7 +102,7 @@ func run() -> void:
 	check(game.on_moon and not paused and not game.gm_open and game.crystals.size() == 3, "actual GM trial button starts the three-prop expedition and resumes controls")
 	check(game.trip_fee == 0 and game.bank == 0, "GM demonstration never charges an entrance fee")
 	if not failed:
-		print("ADVENTURE_LOOT_OK generation_ms=%.1f rotated_shared_grid=true excavation=true pickup_cavity=true drop=true per_type_sale=true details=%s" % [generation_ms, str(results)])
+		print("ADVENTURE_LOOT_OK generation_ms=%.1f rotated_shared_grid=true excavation=true pickup_cavity=true drop=true auto_archived=true details=%s" % [generation_ms, str(results)])
 	game.sfx.set_muted(true)
 	await create_timer(0.10, true).timeout
 	game.queue_free()

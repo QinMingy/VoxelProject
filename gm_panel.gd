@@ -1,4 +1,5 @@
 extends CanvasLayer
+const TouchScroll = preload("res://touch_scroll.gd")
 
 signal opened
 signal closed
@@ -12,6 +13,7 @@ signal audio_enabled_changed(enabled: bool)
 signal technology_requested(action: String, upgrade_id: String, value: int)
 
 const UI = preload("res://ui_style.gd")
+const Palette = preload("res://palette.gd")
 const DEFAULT_CLEANUP_MAX_CELLS := 9
 const BRUSH_NAMES := ["球形", "宽铲", "窄钻"]
 const RADAR_MODES := ["方位条", "圆形盘"]
@@ -183,7 +185,7 @@ func _build() -> void:
 	_technology_tab.toggle_mode = true
 	_technology_tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tabs.add_child(_technology_tab)
-	var scroll := ScrollContainer.new()
+	var scroll := TouchScroll.new()
 	_runtime_scroll = scroll
 	scroll.name = "OptionsScroll"
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -225,7 +227,7 @@ func _layout() -> void:
 	_window.offset_bottom = dimensions.y * 0.5
 
 func _build_technology(parent: VBoxContainer) -> void:
-	_technology_scroll = ScrollContainer.new()
+	_technology_scroll = TouchScroll.new()
 	_technology_scroll.name = "TechnologyScroll"
 	_technology_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_technology_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -299,7 +301,7 @@ func _sync_technology() -> void:
 			target.step = 1
 			target.rounded = true
 			target.prefix = "Lv."
-			target.custom_minimum_size = Vector2(116, 44)
+			target.custom_minimum_size = Vector2(116, 48)
 			target.select_all_on_focus = true
 			line.add_child(target)
 			_technology_spins[id] = target
@@ -346,7 +348,7 @@ func _build_cleanup(parent: VBoxContainer) -> void:
 	_cleanup_check = CheckBox.new()
 	_cleanup_check.name = "CleanupEnabled"
 	_cleanup_check.text = "自动清理"
-	_cleanup_check.custom_minimum_size.y = 44.0
+	_cleanup_check.custom_minimum_size.y = 48.0
 	_cleanup_check.tooltip_text = CLEANUP_HELP
 	_cleanup_check.focus_mode = Control.FOCUS_NONE
 	_cleanup_check.toggled.connect(_on_cleanup_toggled)
@@ -365,7 +367,7 @@ func _build_cleanup(parent: VBoxContainer) -> void:
 	_cleanup_limit.step = 1
 	_cleanup_limit.rounded = true
 	_cleanup_limit.suffix = "格"
-	_cleanup_limit.custom_minimum_size = Vector2(134, 44)
+	_cleanup_limit.custom_minimum_size = Vector2(134, 48)
 	_cleanup_limit.tooltip_text = CLEANUP_HELP
 	_cleanup_limit.select_all_on_focus = true
 	_cleanup_limit.set_value_no_signal(DEFAULT_CLEANUP_MAX_CELLS)
@@ -394,7 +396,7 @@ func _build_cleanup(parent: VBoxContainer) -> void:
 	_performance_check = CheckBox.new()
 	_performance_check.name = "ShowPerformance"
 	_performance_check.text = "显示性能统计"
-	_performance_check.custom_minimum_size.y = 44.0
+	_performance_check.custom_minimum_size.y = 48.0
 	_performance_check.focus_mode = Control.FOCUS_NONE
 	_performance_check.toggled.connect(_on_performance_toggled)
 	parent.add_child(_performance_check)
@@ -404,7 +406,7 @@ func _build_actions(parent: VBoxContainer) -> void:
 	_touch_mode_check = CheckBox.new()
 	_touch_mode_check.name = "TouchMode"
 	_touch_mode_check.text = "触控模式"
-	_touch_mode_check.custom_minimum_size.y = 44.0
+	_touch_mode_check.custom_minimum_size.y = 48.0
 	_touch_mode_check.focus_mode = Control.FOCUS_NONE
 	_touch_mode_check.tooltip_text = "左手移动；右手按住开采并拖动转向。电脑可用鼠标试用。"
 	_touch_mode_check.toggled.connect(_on_touch_mode_toggled)
@@ -412,7 +414,7 @@ func _build_actions(parent: VBoxContainer) -> void:
 	_audio_enabled_check = CheckBox.new()
 	_audio_enabled_check.name = "AudioEnabled"
 	_audio_enabled_check.text = "音效"
-	_audio_enabled_check.custom_minimum_size.y = 44.0
+	_audio_enabled_check.custom_minimum_size.y = 48.0
 	_audio_enabled_check.focus_mode = Control.FOCUS_NONE
 	_audio_enabled_check.toggled.connect(_on_audio_enabled_toggled)
 	parent.add_child(_audio_enabled_check)
@@ -582,7 +584,7 @@ func _card(parent: Node, node_name: String) -> VBoxContainer:
 	var card := PanelContainer.new()
 	card.name = node_name
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	card.add_theme_stylebox_override("panel", UI.panel(Color("#142235"), UI.BORDER, 14))
+	card.add_theme_stylebox_override("panel", UI.panel(Palette.INK, UI.BORDER, 14))
 	parent.add_child(card)
 	return _column(card, "Fields", 8)
 
@@ -600,7 +602,7 @@ func _button(text: String, node_name: String, callback: Callable) -> Button:
 	var button := Button.new()
 	button.name = node_name
 	button.text = text
-	button.custom_minimum_size.y = 44.0
+	button.custom_minimum_size.y = 48.0
 	button.focus_mode = Control.FOCUS_NONE
 	button.pressed.connect(callback)
 	return button

@@ -5,6 +5,7 @@ signal layout_changed
 enum Mode { COMPASS, CIRCLE }
 
 const UI = preload("res://ui_style.gd")
+const Palette = preload("res://palette.gd")
 const CIRCLE_WIDTH := 320.0
 const CIRCLE_HEIGHT := 220.0
 const WIDTH := CIRCLE_WIDTH
@@ -266,7 +267,7 @@ func _draw_tick(font: Font, x: float, label: String) -> void:
 
 func _draw_circle() -> void:
 	draw_line(Vector2(16, 49), Vector2(CIRCLE_WIDTH - 16, 49), UI.BORDER)
-	draw_circle(RADAR_CENTER, RADAR_RADIUS, Color("#0b1623"))
+	draw_circle(RADAR_CENTER, RADAR_RADIUS, Palette.INK)
 	for ring in range(1, 4):
 		var radius := RADAR_RADIUS * float(ring) / 3.0
 		draw_arc(RADAR_CENTER, radius, 0.0, TAU, 52, UI.BORDER, 1.0, true)
@@ -284,7 +285,7 @@ func _draw_circle() -> void:
 		RADAR_CENTER + Vector2(-5.0, 4.5),
 		RADAR_CENTER + Vector2(0.0, -6.0),
 	])
-	draw_polyline(arrow, Color("#0b1623"), 4.0, true)
+	draw_polyline(arrow, Palette.INK, 4.0, true)
 	draw_polyline(arrow, Color.WHITE, 1.6, true)
 
 func _draw_markers() -> void:

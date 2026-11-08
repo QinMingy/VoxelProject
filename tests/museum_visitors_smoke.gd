@@ -72,7 +72,7 @@ func check_current_comment() -> void:
 	check(not key.is_empty() and room.displayed_keys.has(key) and summary.exhibits.has(key),
 		"only a currently displayed owned exhibit can receive a comment")
 	check(room.bubble_text in legal_comments(summary.exhibits[key]),
-		"bubble wording comes from the actual slot specimen, wear and research level")
+		"bubble wording comes from the actual slot specimen and its level")
 
 func check_visitor_clearance() -> void:
 	for visitor: Node3D in room.visitors:
@@ -119,16 +119,12 @@ func wait_for_bubble() -> void:
 func create_collection() -> void:
 	var cargo: Array[Dictionary] = []
 	for category: Dictionary in Progression.Museum.CATEGORIES:
-		var item: Dictionary = category.duplicate(true)
-		item["wear"] = 5 + cargo.size() * 10
-		cargo.append(item)
+		cargo.append(category.duplicate(true))
 	var trip: Dictionary = profile.pay_entry("meadow", true)
 	check(trip.ok, "isolated collection starts a valid fixture expedition")
 	check(profile.settle_expedition(int(trip.trip_id), cargo, false, 65.0).ok,
-		"six canonical item categories enter the actual warehouse ledger")
-	for item: Dictionary in profile.museum_state.warehouse.duplicate(true):
-		check(profile.donate_item(int(item.uid)).ok, "fixture registers a real collected item")
-	check(profile.museum_state.exhibits.size() == 6, "fixture owns all six actual collectible categories")
+		"canonical item categories enter the actual collection ledger")
+	check(profile.museum_state.items.size() == Progression.Museum.CATEGORIES.size(), "fixture owns all actual collectible categories")
 	baseline = profile_snapshot()
 	summary = profile.museum_summary()
 	room.set_collection(summary)
@@ -137,33 +133,22 @@ func check_comment_semantics() -> void:
 	var distinct: Dictionary = {}
 	for category: Dictionary in Progression.Museum.CATEGORIES:
 		var entry: Dictionary = summary.exhibits[category.key].duplicate(true)
-		entry.level = 1
-		entry.bestwear = 10
-		entry.item.wear = 10
-		var ordinary: String = Comments.comment_for(entry, 0)
-		check(not ordinary.is_empty(), "every real category has meaningful comment text")
-		distinct[ordinary] = true
-		entry.bestwear = 60
-		entry.item.wear = 60
-		check(Comments.comment_for(entry, 0) != ordinary, "poor condition changes this category's comment")
-		entry.bestwear = 10
-		entry.item.wear = 10
-		entry.level = 3
-		check(Comments.comment_for(entry, 0) != ordinary, "research level changes this category's comment")
-		# Excellent/worn items must retain observations about their actual form,
-		# rather than all becoming the same condition template with a new noun.
-		for wear: int in [0, 60]:
-			entry.bestwear = wear
-			entry.item.wear = wear
+		for level in [1, 4, 7]:
+			entry.level = level
 			var options := legal_comments(entry)
-			check(options.size() >= 2, "this category has rotating observations at either condition extreme")
+			check(options.size() >= 2, "this category has rotating observations at level %d" % level)
 			var characteristic_found := false
 			for text: String in options:
 				for reaction: String in Comments.REACTIONS[category.key]:
 					if text.contains(reaction):
 						characteristic_found = true
-			check(characteristic_found, "condition commentary retains an observation specific to the item category")
-	check(distinct.size() == 6, "small/medium/large crystals, chest, shield and hammer have distinct comments")
+			check(characteristic_found, "level commentary retains an observation specific to the item category")
+		entry.level = 1
+		var low_text: String = Comments.comment_for(entry, 0)
+		distinct[low_text] = true
+		entry.level = 7
+		check(Comments.comment_for(entry, 0) != low_text, "a higher level changes this category's commentary")
+	check(distinct.size() == Progression.Museum.CATEGORIES.size(), "every collectible category has distinct comments")
 	check(profile_snapshot() == baseline, "comment selection is a read-only operation")
 
 func run() -> void:
@@ -197,8 +182,8 @@ func run() -> void:
 
 	create_collection()
 	check_comment_semantics()
-	check(room.displayed_keys.size() == 3 and summary.exhibits.size() == 6,
-		"test distinguishes three displayed exhibits from six owned categories")
+	check(room.displayed_keys.size() == 6 and summary.exhibits.size() == Progression.Museum.CATEGORIES.size(),
+		"test distinguishes six displayed exhibits from every owned category")
 	check(not room.bubble_visible and room.bubble_text.is_empty(), "changing collection clears the old empty-hall comment")
 	var populated_result := advance(180.0)
 	check(populated_result.activations >= 3 and populated_result.hidden_frames > 0,
@@ -224,7 +209,7 @@ func run() -> void:
 	room.set_process(false)
 	wait_for_bubble()
 
-	# Keep all six collection entries, but only display a previously hidden type.
+	# Keep every collection entry, but only display a previously hidden type.
 	# A stale comment or a random comment chosen from owned items now fails.
 	for slot in range(int(summary.capacity)):
 		check(profile.place_exhibit("", slot).ok, "clear the old display through the real placement ledger")
@@ -238,9 +223,9 @@ func run() -> void:
 	check(changed_result.activations >= 2 and changed_result.slots == [1],
 		"subsequent bubbles refer only to the newly displayed slot")
 	check(profile_snapshot() == baseline and profile.profile_path.is_empty(),
-		"visitors never change resources, wear, levels, records or save ownership")
+		"visitors never change resources, levels, records or save ownership")
 	room.set_active(false)
 	viewport.queue_free()
 	await process_frame
-	print("MUSEUM_VISITORS_OK no_protagonist=true roaming=true canonical_categories=true wear_level_comments=true displayed_only=true periodic_single_bubble=true inactive_frozen=true rearrange_clears=true memory_only=true")
+	print("MUSEUM_VISITORS_OK no_protagonist=true roaming=true canonical_categories=true level_comments=true displayed_only=true periodic_single_bubble=true inactive_frozen=true rearrange_clears=true memory_only=true")
 	quit(0)

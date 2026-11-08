@@ -3,8 +3,8 @@ extends RefCounted
 # Static props are transformed once, then rasterised on the terrain's lattice.
 # One cell set drives their visible surface, terrain exclusion and extraction.
 const Terrain = preload("res://terrain.gd")
+const Palette = preload("res://palette.gd")
 const CELL_SIZE := Terrain.CELL_SIZE
-const OUTLINE_WIDTH := 0.014
 const MAX_CANDIDATE_CELLS := 24000
 const EPSILON := 0.000001
 const STEPS := [Vector3i.UP, Vector3i.DOWN, Vector3i.RIGHT, Vector3i.LEFT, Vector3i.BACK, Vector3i.FORWARD]
@@ -364,7 +364,6 @@ static func _build_geometry(shape: Dictionary, colors: Dictionary, candidates: D
 	var centres := PackedVector3Array()
 	var exterior: Array[Vector3i] = []
 	var face_colors := {}
-	var corner_normals := {}
 	for cell: Vector3i in shape:
 		cells.append(cell)
 		var low := Vector3(cell) * CELL_SIZE
@@ -378,10 +377,7 @@ static func _build_geometry(shape: Dictionary, colors: Dictionary, candidates: D
 			exterior.append(adjacent)
 			var normal := Vector3(STEPS[side])
 			var face: Array = FACE_CORNERS[side]
-			for corner_index: int in face:
-				var corner: Vector3 = corners[corner_index]
-				corner_normals[corner] = Vector3(corner_normals.get(corner, Vector3.ZERO)) + normal
-			var color: Color = colors.get(cell, Color("#c79a67"))
+			var color: Color = colors.get(cell, Palette.RUST)
 			var face_key := Vector4i(cell.x, cell.y, cell.z, side)
 			if fixed_face_colors.has(face_key):
 				color = fixed_face_colors[face_key]
@@ -398,12 +394,4 @@ static func _build_geometry(shape: Dictionary, colors: Dictionary, candidates: D
 				surface.set_normal(normal)
 				surface.add_vertex(vertex)
 	var mesh: ArrayMesh = surface.commit()
-	var vertices: PackedVector3Array = mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
-	for index in range(vertices.size()):
-		vertices[index] += Vector3(corner_normals[vertices[index]]).normalized() * OUTLINE_WIDTH
-	var arrays := []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = vertices
-	var outline := ArrayMesh.new()
-	outline.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return {"mesh": mesh, "outline": outline, "cells": cells, "centers": centres, "exterior": exterior, "cell_colors": colors, "face_colors": face_colors}
+	return {"mesh": mesh, "cells": cells, "centers": centres, "exterior": exterior, "cell_colors": colors, "face_colors": face_colors}

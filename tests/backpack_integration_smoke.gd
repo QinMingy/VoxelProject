@@ -24,11 +24,11 @@ func approach(game: Node3D, item: Node3D) -> void:
 	game.camera.look_at(item.position)
 	game.update_crystal_targets()
 
-func excavate(game: Node3D, item: Crystal, tier: int, wear: int) -> void:
+func excavate(game: Node3D, item: Crystal, tier: int, _wear: int) -> void:
 	var scale_by_tier := [0.30, 0.42, 0.54]
 	var surface: float = game.terrain.natural_height_at(item.position.x, item.position.z)
 	item.setup_site(surface, 0.18, scale_by_tier[tier])
-	item.set_wear(float(wear) / 100.0)
+	item.set_wear(0.0)
 	require(not item.is_loose(), "test specimen starts embedded in real terrain")
 	# No loose flags or fake inventory records: use the player's ray and brush API.
 	var bounds := item.get_local_bounds()
@@ -50,7 +50,7 @@ func excavate(game: Node3D, item: Crystal, tier: int, wear: int) -> void:
 	require(game.crystal == item, "released specimen is the nearby selected target")
 
 func value_of(record: Dictionary) -> int:
-	return roundi(float(record.base_value) * (100 - int(record.wear)) / 100.0)
+	return int(record.base_value)
 
 func inventory_value(game: Node3D) -> int:
 	var total := 0
@@ -82,7 +82,7 @@ func run() -> void:
 		require(game.collect_crystal(item), "real excavated specimen fits its assigned footprint")
 		collected.append(item)
 		var record: Dictionary = game.inventory.get_item(item.get_instance_id())
-		require(record.wear == wears[index] and record.base_value == Crystal.BASE_VALUES[tiers[index]], "size and wear are snapshotted separately for every item")
+		require(record.base_value == Crystal.BASE_VALUES[tiers[index]], "size and catalogue value are snapshotted for every item")
 	require(game.inventory.items.size() == 8 and game.inventory.used_cells() == 16, "mixed sizes fill all 16 cells")
 	var full_snapshot: Array = game.inventory.items.duplicate(true)
 	var medium_id: int = collected[2].get_instance_id()
@@ -137,7 +137,7 @@ func run() -> void:
 	require(game.inventory.used_cells() == 12 and game.inventory.get_item(dropped_id).is_empty(), "dropping frees the entire footprint")
 	require(inventory_value(game) == sale_before_drop - dropped_value, "dropped specimen is removed from the eventual sale")
 	require(not dropped.collected and dropped.visible and dropped.is_loose(), "drop restores the actual collectible world instance")
-	require(game.suit.position.distance_to(dropped.position) <= 1.85 and dropped.wear_percent == 60 and dropped.size_tier == 2, "drop remains within pickup reach and preserves wear and size")
+	require(game.suit.position.distance_to(dropped.position) <= Main.PICKUP_REACH and dropped.size_tier == 2, "drop remains within pickup reach and preserves size")
 	require(game.collect_crystal(dropped), "dropped specimen can be picked back up")
 	game.drop_inventory_item(dropped_id)
 	require(game.pending_pickup == pending, "dropping and repicking cannot replace the pending specimen")
@@ -159,26 +159,19 @@ func run() -> void:
 	# Packed values must not depend on subsequently changed world-model state.
 	pending.set_wear(0.65)
 	game.appraisal.base_value = 1
-	game.appraisal.wear_percent = 65
-	require(inventory_value(game) == expected_sale, "packed size and wear remain immutable snapshots")
+	require(inventory_value(game) == expected_sale, "packed values remain immutable snapshots")
 	require(game.gain_oxygen(7) > 0.0 and game.oxygen_grains == 7, "oxygen gains are tracked outside the backpack")
 	var bank_before: int = game.bank
 	game.settle(false)
-	require(game.bank == bank_before and game.progression.museum_state.warehouse.size() == expected_count, "safe return stores each collected crystal and excludes the dropped specimen and oxygen from cargo")
-	var warehouse_value := 0
-	for stored: Dictionary in game.progression.museum_state.warehouse:
-		warehouse_value += value_of(stored)
-		require(not stored.has("world_id") and not stored.has("pos") and not stored.has("rotated"), "persistent cargo strips transient world IDs and backpack placement")
-	require(warehouse_value == expected_sale and game.delivered_clusters == expected_count and not game.appraisal.known, "warehouse preserves immutable mixed-size prices without identifying unprocessed cargo")
-	var stored_cargo: Array = game.progression.museum_state.warehouse.duplicate(true)
-	for stored: Dictionary in stored_cargo:
-		game.on_museum_sell(int(stored.uid))
-	require(game.bank == bank_before + expected_sale and game.appraisal.known and game.progression.museum_state.warehouse.is_empty(), "explicit sales sum independent crystal prices and identify the type exactly once")
+	var archived := 0
+	for key: String in game.progression.museum_state.items:
+		archived += int(game.progression.museum_state.items[key].copies)
+	require(game.bank == bank_before and archived == expected_count and game.delivered_clusters == expected_count,
+		"safe return archives each collected crystal and excludes the dropped specimen and oxygen")
 	require(game.inventory.items.is_empty() and game.carried_crystals.is_empty(), "safe settlement clears inventory and carried instances")
 	game.start_trip(false)
 	game.terrain.reset_terrain(88273)
 	game.spawn_crystals(7723)
-	game.appraisal.reset_catalogue()
 	for tier in range(3):
 		var item: Crystal = game.crystals[tier]
 		excavate(game, item, tier, 10 + tier * 15)
@@ -188,12 +181,11 @@ func run() -> void:
 	bank_before = game.bank
 	game.settle(true)
 	require(game.bank == bank_before and game.delivered_clusters == expected_count, "rescue pays nothing and sells none of the mixed-size crystals")
-	require(game.inventory.items.is_empty() and game.carried_crystals.is_empty() and game.packed_specimens.is_empty(), "rescue clears all inventory representations")
-	require(not game.appraisal.known, "rescue never identifies an unsold specimen")
+	require(game.inventory.items.is_empty() and game.carried_crystals.is_empty(), "rescue clears all inventory representations")
 	game.sfx.set_muted(true)
 	await create_timer(0.10, true).timeout
 	game.queue_free()
 	await process_frame
 	await create_timer(0.25, true).timeout
-	print("BACKPACK_INTEGRATION_OK real_excavation=true full=16 pause=true drop_repick=true rotated_swap=true pending_identity=true mixed_size_sale=%d rescue=0" % expected_sale)
+	print("BACKPACK_INTEGRATION_OK real_excavation=true full=16 pause=true drop_repick=true rotated_swap=true pending_identity=true archived=%d rescue=0" % expected_count)
 	quit(1 if test_failed else 0)

@@ -1,11 +1,7 @@
 extends SceneTree
 
 const VoxelModel = preload("res://voxel_model.gd")
-const FIXTURES := [
-	{"file": "chest", "size": 1.0},
-	{"file": "shield", "size": 1.125},
-	{"file": "warhammer", "size": 1.25},
-]
+const AdventureItems = preload("res://adventure_items.gd")
 var failed := false
 
 
@@ -76,19 +72,22 @@ func verify(canonical: Dictionary, rotated: Dictionary, rotation: Basis, label: 
 func run() -> void:
 	var turns := orientations()
 	var details := []
-	for definition: Dictionary in FIXTURES:
-		var scene: PackedScene = load("res://assets/adventure/%s.glb" % definition.file)
-		var canonical := VoxelModel.sample_orthogonal_scene(scene, Vector3i.ZERO, float(definition.size))
-		require(not canonical.is_empty(), "sample canonical " + str(definition.file))
+	for index in range(AdventureItems.ITEMS.size()):
+		var definition: Dictionary = AdventureItems.ITEMS[index]
+		var label := str(definition.id)
+		var target_size := float(definition.size)
+		var scene: PackedScene = AdventureItems.source_scene(index)
+		var canonical := VoxelModel.sample_orthogonal_scene(scene, Vector3i.ZERO, target_size)
+		require(not canonical.is_empty(), "sample canonical " + label)
 		if canonical.is_empty():
 			continue
 		var started := Time.get_ticks_usec()
 		for turn in turns:
-			var result := VoxelModel.sample_orthogonal_scene(scene, turn, float(definition.size))
-			verify(canonical, result, VoxelModel.orthogonal_basis(turn), "%s %s" % [definition.file, turn])
-		var complete_turn := VoxelModel.sample_orthogonal_scene(scene, Vector3i(0, 4, 0), float(definition.size))
+			var result := VoxelModel.sample_orthogonal_scene(scene, turn, target_size)
+			verify(canonical, result, VoxelModel.orthogonal_basis(turn), "%s %s" % [label, turn])
+		var complete_turn := VoxelModel.sample_orthogonal_scene(scene, Vector3i(0, 4, 0), target_size)
 		require(complete_turn.cell_colors == canonical.cell_colors and complete_turn.face_colors == canonical.face_colors, "four quarter turns restore exact cell and face palettes")
-		details.append({"source": definition.file, "cells": canonical.cells.size(), "faces": canonical.exterior.size(), "canonical_sample_us": canonical.diagnostics.canonical_sample_us, "all_24_checks_us": Time.get_ticks_usec() - started})
+		details.append({"source": label, "cells": canonical.cells.size(), "faces": canonical.exterior.size(), "canonical_sample_us": canonical.diagnostics.canonical_sample_us, "all_24_checks_us": Time.get_ticks_usec() - started})
 	if not failed:
-		print("ORTHOGONAL_VOXEL_OK sources=3 orientations=24 exact_count=true no_holes=true face_palette_roundtrip=true four_turns_restore=true details=", details)
+		print("ORTHOGONAL_VOXEL_OK sources=%d orientations=24 exact_count=true no_holes=true face_palette_roundtrip=true four_turns_restore=true details=" % AdventureItems.ITEMS.size(), details)
 	quit(1 if failed else 0)

@@ -1,52 +1,47 @@
 extends CanvasLayer
+const TouchScroll = preload("res://touch_scroll.gd")
 
 signal opened
 signal closed
-signal donate_requested(uid: int)
-signal sell_requested(uid: int)
 signal place_requested(key: String, slot: int)
+signal stand_selected(slot: int)
+signal zone_selected(zone: int)
+signal item_selected(key: String)
 signal research_requested
 signal feedback(event: String)
 
 const UI = preload("res://ui_style.gd")
-const MuseumDisplay = preload("res://museum_display.gd")
-const CATEGORY_KEYS := ["crystal_small", "crystal_medium", "crystal_large", "chest", "shield", "hammer"]
-const CATEGORY_NAMES := ["小型晶石", "中型晶石", "大型晶石", "冒险宝箱", "冒险者盾牌", "遗落战锤"]
+const Museum = preload("res://museum.gd")
+const Palette = preload("res://palette.gd")
 
 var is_open := false
-var selected_uid := -1
 var selected_key := ""
-var selected_stand := 0
-var _tab := "warehouse"
-var _state: Dictionary = {"bank": 0, "research_points": 0, "museum": {}, "message": "", "touch_mode": false}
+var selected_stand := -1
+var selected_zone := 0
+var _state: Dictionary = {"bank": 0, "research_points": 0, "museum": {}, "message": ""}
 var _modal: Control
+var _left: PanelContainer
+var _right: PanelContainer
 var _window: PanelContainer
 var _balance: Label
 var _summary: Label
 var _message: Label
-var _warehouse_tab: Button
-var _catalogue_tab: Button
-var _warehouse_scroll: ScrollContainer
-var _catalogue_scroll: ScrollContainer
-var _warehouse_list: VBoxContainer
-var _catalogue_list: VBoxContainer
+var _zone_tabs: Array[Button] = []
+var _item_scroll: ScrollContainer
+var _item_list: VBoxContainer
+var _item_buttons: Dictionary = {}
+var _stand_header: Label
+var _stand_selection: Label
 var _detail_name: Label
 var _detail_info: Label
-var _donate_button: Button
-var _sell_button: Button
-var _place_button: Button
-var _clear_button: Button
-var _stand_buttons: Array[Button] = []
-var _viewport_container: SubViewportContainer
-var _viewport: SubViewport
-var _display: MuseumDisplay
+var _detail_bar: ProgressBar
+var _detail_xp: Label
+var _action_button: Button
+var _action_mode := ""
 var _income: Label
+var _swatches: Dictionary = {}
 var _entrance: Tween
 var _pending := false
-var _room_pointer_down := false
-var _room_pointer_dragged := false
-var _room_pointer_start := Vector2.ZERO
-var _room_touch_index := -1
 
 func _init() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -63,12 +58,12 @@ func open() -> void:
 		return
 	is_open = true
 	_pending = false
+	selected_stand = -1
+	selected_key = ""
 	_modal.show()
 	_refresh()
 	_layout()
 	_layout.call_deferred()
-	_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	_display.set_active(true)
 	if is_instance_valid(_entrance):
 		_entrance.kill()
 	_modal.modulate.a = 0
@@ -81,19 +76,18 @@ func close() -> void:
 		return
 	is_open = false
 	_pending = false
-	_room_pointer_down = false
-	_room_touch_index = -1
 	if is_instance_valid(_entrance):
 		_entrance.kill()
 	_modal.hide()
-	_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
-	_display.set_active(false)
 	closed.emit()
 
 func sync_state(data: Dictionary) -> void:
 	for key: String in _state:
 		if data.has(key):
 			_state[key] = data[key].duplicate(true) if data[key] is Dictionary or data[key] is Array else data[key]
+	if _pending:
+		# A completed install/remove returns the panel to the stand's own view.
+		selected_key = ""
 	_pending = false
 	if is_instance_valid(_modal):
 		_refresh()
@@ -102,148 +96,112 @@ func _build() -> void:
 	_modal = Control.new()
 	_modal.name = "MuseumRoot"
 	_modal.theme = UI.theme()
+	_modal.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_modal.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(_modal)
-	var background := ColorRect.new()
-	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	background.color = Color("#0a1420")
-	_modal.add_child(background)
-	_window = PanelContainer.new()
-	_window.name = "MuseumWindow"
-	_window.add_theme_stylebox_override("panel", UI.panel(UI.PANEL, UI.BORDER, 20, 16))
-	_modal.add_child(_window)
-	var contents := VBoxContainer.new()
-	contents.add_theme_constant_override("separation", 12)
-	_window.add_child(contents)
+
+	_left = PanelContainer.new()
+	_left.name = "MuseumWindow"
+	_left.mouse_filter = Control.MOUSE_FILTER_STOP
+	_left.add_theme_stylebox_override("panel", UI.panel(UI.PANEL, UI.BORDER, 16, 2))
+	_modal.add_child(_left)
+	_window = _left
+	var left_column := VBoxContainer.new()
+	left_column.add_theme_constant_override("separation", 8)
+	_left.add_child(left_column)
 	var header := HBoxContainer.new()
-	header.add_theme_constant_override("separation", 16)
-	contents.add_child(header)
-	var heading := VBoxContainer.new()
-	heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	heading.add_theme_constant_override("separation", 0)
-	header.add_child(heading)
-	heading.add_child(_label("仓库", 30))
-	_summary = _label("", 18, UI.MUTED)
-	heading.add_child(_summary)
-	_balance = _label("", 22, UI.ACCENT)
-	header.add_child(_balance)
-	header.add_child(_button("展馆研究", "ResearchButton", func() -> void: research_requested.emit()))
-	header.add_child(_button("返回大厅", "CloseButton", close))
-	var body := HBoxContainer.new()
-	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	body.add_theme_constant_override("separation", 16)
-	contents.add_child(body)
-	var left := VBoxContainer.new()
-	left.custom_minimum_size.x = 286
-	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	left.size_flags_stretch_ratio = 0.74
-	left.add_theme_constant_override("separation", 10)
-	body.add_child(left)
-	var tabs := HBoxContainer.new()
-	tabs.add_theme_constant_override("separation", 8)
-	left.add_child(tabs)
-	_warehouse_tab = _button("待整理", "WarehouseTab", func() -> void: _select_tab("warehouse"))
-	_warehouse_tab.toggle_mode = true
-	_warehouse_tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	tabs.add_child(_warehouse_tab)
-	_catalogue_tab = _button("展品", "CatalogueTab", func() -> void: _select_tab("catalogue"))
-	_catalogue_tab.toggle_mode = true
-	_catalogue_tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	tabs.add_child(_catalogue_tab)
-	_warehouse_scroll = _scroll(left, "WarehouseScroll")
-	_warehouse_list = _column(_warehouse_scroll, "WarehouseList")
-	_catalogue_scroll = _scroll(left, "CatalogueScroll")
-	_catalogue_list = _column(_catalogue_scroll, "CatalogueList")
+	header.add_theme_constant_override("separation", 8)
+	left_column.add_child(header)
+	var title := _label("仓库", 28)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(title)
+	header.add_child(_button("关闭", "CloseButton", close))
+	_summary = _label("", 16, UI.MUTED)
+	left_column.add_child(_summary)
+	_balance = _label("", 18, UI.ACCENT)
+	left_column.add_child(_balance)
+	var zone_row := HBoxContainer.new()
+	zone_row.add_theme_constant_override("separation", 6)
+	left_column.add_child(zone_row)
+	for zone in range(Museum.ZONE_COUNT):
+		var tab := _button(str(Museum.ZONES[zone].label), "ZoneTab_%d" % zone, select_zone.bind(zone))
+		tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		tab.custom_minimum_size.x = 0
+		zone_row.add_child(tab)
+		_zone_tabs.append(tab)
+	_item_scroll = TouchScroll.new()
+	_item_scroll.name = "ItemScroll"
+	_item_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_item_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_item_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_item_scroll.follow_focus = true
+	left_column.add_child(_item_scroll)
+	_item_list = _column(_item_scroll, "ItemList")
+	_message = _label("", 16, UI.WARNING)
+	_message.name = "MuseumMessage"
+	_message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_message.custom_minimum_size.y = 34
+	left_column.add_child(_message)
+	left_column.add_child(_button("展馆研究", "ResearchButton", func() -> void: research_requested.emit()))
+
+	_right = PanelContainer.new()
+	_right.name = "MuseumInfoWindow"
+	_right.mouse_filter = Control.MOUSE_FILTER_STOP
+	_right.add_theme_stylebox_override("panel", UI.panel(UI.PANEL, UI.BORDER, 16, 2))
+	_modal.add_child(_right)
+	var right_column := VBoxContainer.new()
+	right_column.add_theme_constant_override("separation", 8)
+	_right.add_child(right_column)
+	var stand_row := HBoxContainer.new()
+	stand_row.add_theme_constant_override("separation", 8)
+	right_column.add_child(stand_row)
+	var prev_button := _button("◀", "PrevStandButton", _step_stand.bind(-1))
+	prev_button.custom_minimum_size = Vector2(48, 48)
+	stand_row.add_child(prev_button)
+	_stand_header = _label("展台", 22, UI.TEXT)
+	_stand_header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_stand_header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	stand_row.add_child(_stand_header)
+	var next_button := _button("▶", "NextStandButton", _step_stand.bind(1))
+	next_button.custom_minimum_size = Vector2(48, 48)
+	stand_row.add_child(next_button)
+	_stand_selection = _label("", 18, UI.MUTED)
+	_stand_selection.name = "SelectedStand"
+	_stand_selection.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	right_column.add_child(_stand_selection)
 	var detail := PanelContainer.new()
-	detail.add_theme_stylebox_override("panel", UI.panel(Color("#142638"), UI.BORDER, 14, 12))
-	left.add_child(detail)
+	detail.add_theme_stylebox_override("panel", UI.panel(Palette.DEEP_SLATE, UI.BORDER, 12, 2))
+	right_column.add_child(detail)
 	var details := _column(detail, "SelectedItemDetails")
-	_detail_name = _label("选择一件发现", 23)
+	_detail_name = _label("选择一件藏品", 20)
 	_detail_name.name = "SelectedItemName"
+	_detail_name.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	details.add_child(_detail_name)
-	_detail_info = _label("", 18, UI.MUTED)
+	_detail_info = _label("", 17, UI.MUTED)
 	_detail_info.name = "SelectedItemInfo"
 	_detail_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	details.add_child(_detail_info)
-	_donate_button = _button("登记展品", "DonateButton", _request_donate)
-	_donate_button.tooltip_text = "展品登记与重复件研究会消耗这件物品。仓库保留品相最好的一件作为展品，研究升级获得研究点。"
-	details.add_child(_donate_button)
-	_sell_button = _button("出售", "SellButton", _request_sell)
-	details.add_child(_sell_button)
-	_place_button = _button("放上展台", "PlaceButton", _request_place)
-	details.add_child(_place_button)
-	var right := VBoxContainer.new()
-	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	right.size_flags_stretch_ratio = 1.65
-	right.add_theme_constant_override("separation", 10)
-	body.add_child(right)
-	var room_card := PanelContainer.new()
-	room_card.name = "MuseumRoomCard"
-	room_card.add_theme_stylebox_override("panel", UI.panel(Color("#58667f"), UI.BORDER, 0, 12))
-	room_card.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	room_card.custom_minimum_size.y = 300
-	right.add_child(room_card)
-	_viewport_container = SubViewportContainer.new()
-	_viewport_container.name = "MuseumRoomView"
-	_viewport_container.stretch = true
-	_viewport_container.mouse_target = true
-	_viewport_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_viewport_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	room_card.add_child(_viewport_container)
-	_viewport = SubViewport.new()
-	_viewport.name = "MuseumViewport"
-	_viewport.size = Vector2i(720, 420)
-	_viewport.own_world_3d = true
-	_viewport.msaa_3d = Viewport.MSAA_2X
-	_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
-	_viewport_container.add_child(_viewport)
-	_display = MuseumDisplay.new()
-	_display.name = "MuseumRoom"
-	_viewport.add_child(_display)
-	_display.slot_requested.connect(select_stand)
-	_viewport_container.gui_input.connect(_room_input)
-	_viewport.size_changed.connect(_resize_room)
-	var room_caption := _label("点击展台选择  ·  拖动转动视角", 18, UI.MUTED)
-	right.add_child(room_caption)
-	var stands := HBoxContainer.new()
-	stands.add_theme_constant_override("separation", 6)
-	right.add_child(stands)
-	for slot in range(6):
-		var button := _button("%02d" % (slot + 1), "Stand_%d" % slot, select_stand.bind(slot))
-		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.custom_minimum_size.x = 0
-		stands.add_child(button)
-		_stand_buttons.append(button)
-	var operations := HBoxContainer.new()
-	operations.add_theme_constant_override("separation", 10)
-	right.add_child(operations)
-	_income = _label("", 20, UI.ACCENT)
-	_income.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_detail_bar = ProgressBar.new()
+	_detail_bar.name = "SelectedItemExperience"
+	_detail_bar.show_percentage = false
+	_detail_bar.custom_minimum_size.y = 10
+	_detail_bar.max_value = 1.0
+	_detail_bar.add_theme_stylebox_override("background", UI.panel(Palette.INK, Color.TRANSPARENT, 0, 2))
+	_detail_bar.add_theme_stylebox_override("fill", UI.panel(UI.ACCENT, Color.TRANSPARENT, 0, 2))
+	details.add_child(_detail_bar)
+	_detail_xp = _label("", 16, UI.MUTED)
+	details.add_child(_detail_xp)
+	_income = _label("", 18, UI.ACCENT)
 	_income.tooltip_text = "按出发时的陈列计算，随出舱时间累计，65 秒达到本趟上限。至少出舱 10 秒并安全返航才结算；菜单与离线时间不累计。"
-	operations.add_child(_income)
-	_clear_button = _button("收回仓库", "ClearStandButton", _request_clear)
-	operations.add_child(_clear_button)
-	_message = _label("", 18, UI.WARNING)
-	_message.name = "MuseumMessage"
-	_message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_message.custom_minimum_size.y = 25
-	contents.add_child(_message)
-
-func _scroll(parent: Node, node_name: String) -> ScrollContainer:
-	var scroll := ScrollContainer.new()
-	scroll.name = node_name
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.custom_minimum_size.y = 120
-	parent.add_child(scroll)
-	return scroll
+	right_column.add_child(_income)
+	_action_button = _button("选择展台", "ActionButton", _request_action)
+	right_column.add_child(_action_button)
 
 func _column(parent: Node, node_name: String) -> VBoxContainer:
 	var box := VBoxContainer.new()
 	box.name = node_name
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	box.add_theme_constant_override("separation", 10)
+	box.add_theme_constant_override("separation", 8)
 	parent.add_child(box)
 	return box
 
@@ -258,287 +216,248 @@ func _button(text: String, node_name: String, action: Callable) -> Button:
 	var button := Button.new()
 	button.name = node_name
 	button.text = text
-	button.custom_minimum_size.y = 46
-	button.add_theme_font_size_override("font_size", 20)
+	button.custom_minimum_size.y = 48
+	button.add_theme_font_size_override("font_size", 18)
 	button.pressed.connect(action)
 	return button
 
 func _layout() -> void:
 	var viewport_size := get_viewport().get_visible_rect().size
-	var width := minf(1440.0, viewport_size.x - 48.0)
-	var height := viewport_size.y - 48.0
-	_window.size = Vector2(width, height)
-	_window.position = (viewport_size - _window.size) * 0.5
-	_resize_room.call_deferred()
-
-func _resize_room() -> void:
-	if is_instance_valid(_display):
-		_display.set_viewport_size(Vector2(_viewport.size))
-
-func _select_tab(tab: String) -> void:
-	_tab = tab
-	_pending = false
-	feedback.emit("ui_click")
-	_refresh()
+	var margin := 8.0
+	var width := clampf(viewport_size.x * 0.29, 280.0, 360.0)
+	width = minf(width, maxf(280.0, (viewport_size.x - margin * 3.0 - 300.0) * 0.5))
+	var height := maxf(0.0, viewport_size.y - margin * 2.0)
+	_left.position = Vector2(margin, margin)
+	_left.size = Vector2(width, height)
+	_right.custom_minimum_size = Vector2(width, 0)
+	_right.position = Vector2(viewport_size.x - margin - width, margin)
+	_right.reset_size()
+	if _right.size.y > height:
+		_right.size = Vector2(width, height)
 
 func _museum() -> Dictionary:
 	return _state.get("museum", {})
 
-func _warehouse_item() -> Dictionary:
-	for item: Dictionary in _museum().get("warehouse", []):
-		if int(item.get("uid", -1)) == selected_uid:
-			return item
+func _rows() -> Array:
+	return _museum().get("catalogue_rows", [])
+
+func _owned_rows() -> Array:
+	var owned: Array = []
+	for row: Dictionary in _rows():
+		if bool(row.get("owned", false)):
+			owned.append(row)
+	return owned
+
+func _row_for(key: String) -> Dictionary:
+	for row: Dictionary in _rows():
+		if str(row.get("key", "")) == key:
+			return row
 	return {}
 
-func _key_for_item(item: Dictionary) -> String:
-	var kind := str(item.get("item_type", "crystal"))
-	if kind != "crystal":
-		return kind
-	var footprint: Vector2i = item.get("footprint", Vector2i.ONE)
-	return "crystal_small" if footprint == Vector2i.ONE else ("crystal_large" if footprint == Vector2i(2, 2) else "crystal_medium")
-
-func _item_name(item: Dictionary) -> String:
-	return str(item.get("item_name", item.get("label", "未命名藏品")))
-
-func _known(item: Dictionary) -> bool:
-	return _museum().get("identified_types", []).has(str(item.get("item_type", "crystal")))
-
-func _worth(item: Dictionary) -> int:
-	return roundi(float(item.get("base_value", 0)) * float(100 - int(item.get("wear", 0))) / 100.0)
-
 func _remove_list_children(list: Control) -> void:
-	for child in list.get_children():
+	for child: Node in list.get_children():
 		list.remove_child(child)
 		child.queue_free()
 
+func _swatch(color: Color) -> Texture2D:
+	var key := color.to_html()
+	if _swatches.has(key):
+		return _swatches[key]
+	var image := Image.create(48, 48, false, Image.FORMAT_RGBA8)
+	image.fill(color)
+	for x in range(48):
+		for edge in [0, 1, 46, 47]:
+			image.set_pixel(x, edge, Palette.INK)
+			image.set_pixel(edge, x, Palette.INK)
+	var texture := ImageTexture.create_from_image(image)
+	_swatches[key] = texture
+	return texture
+
 func _refresh() -> void:
 	var museum := _museum()
-	var warehouse: Array = museum.get("warehouse", [])
-	var exhibits: Dictionary = museum.get("exhibits", {})
+	var rows := _owned_rows()
 	var slots: Array = museum.get("slots", [])
-	var capacity := int(museum.get("capacity", 3))
-	selected_stand = clampi(selected_stand, 0, maxi(0, capacity - 1))
-	if not _warehouse_item().is_empty():
-		pass
-	elif not warehouse.is_empty():
-		selected_uid = int(warehouse[0].get("uid", -1))
-	else:
-		selected_uid = -1
-	if selected_key.is_empty() or not exhibits.has(selected_key):
-		selected_key = str(exhibits.keys()[0]) if not exhibits.is_empty() else ""
-	_balance.text = "资金 %d\n研究点 %d" % [int(_state.bank), int(_state.research_points)]
-	_summary.text = "展品 %d / 6  ·  陈列 %d / %d" % [exhibits.size(), int(museum.get("displayed_count", _displayed_count(slots))), capacity]
-	_warehouse_tab.text = "待整理 %d" % warehouse.size()
-	_catalogue_tab.text = "展品 %d / 6" % exhibits.size()
-	_warehouse_tab.button_pressed = _tab == "warehouse"
-	_catalogue_tab.button_pressed = _tab == "catalogue"
-	_warehouse_tab.add_theme_stylebox_override("normal", UI.panel(Color("#23554d") if _tab == "warehouse" else Color("#213347"), UI.ACCENT if _tab == "warehouse" else UI.BORDER, 10, 8))
-	_catalogue_tab.add_theme_stylebox_override("normal", UI.panel(Color("#23554d") if _tab == "catalogue" else Color("#213347"), UI.ACCENT if _tab == "catalogue" else UI.BORDER, 10, 8))
-	_warehouse_scroll.visible = _tab == "warehouse"
-	_catalogue_scroll.visible = _tab == "catalogue"
-	_remove_list_children(_warehouse_list)
-	if warehouse.is_empty():
-		var empty := _label("仓库还没有发现\n\n出舱挖出完整物品，\n安全回舱后再来看看。", 20, UI.MUTED)
-		empty.name = "EmptyWarehouse"
-		_warehouse_list.add_child(empty)
-	for item: Dictionary in warehouse:
-		var uid := int(item.get("uid", -1))
-		var price := "估价 %d" % _worth(item) if _known(item) else "售价 ？"
-		var button := _button("%s\n磨损 %d%%  ·  %s" % [_item_name(item), int(item.get("wear", 0)), price], "WarehouseItem_%d" % uid, select_warehouse_item.bind(uid))
+	var capacity := int(museum.get("capacity", 6))
+	var exhibits: Dictionary = museum.get("exhibits", {})
+	if not selected_key.is_empty() and not exhibits.has(selected_key):
+		selected_key = ""
+	selected_stand = clampi(selected_stand, -1, maxi(0, capacity - 1))
+	if selected_stand >= 0:
+		selected_zone = clampi(selected_stand / Museum.ZONE_SIZE, 0, Museum.ZONE_COUNT - 1)
+	selected_zone = clampi(selected_zone, 0, maxi(0, (capacity - 1) / Museum.ZONE_SIZE))
+	_balance.text = "资金 %d  ·  研究点 %d" % [int(_state.bank), int(_state.research_points)]
+	_summary.text = "藏品 %d  ·  陈列 %d / %d" % [rows.size(), int(museum.get("displayed_count", 0)), capacity]
+	for zone in range(_zone_tabs.size()):
+		var tab := _zone_tabs[zone]
+		var unlocked := zone * Museum.ZONE_SIZE < capacity
+		tab.disabled = not unlocked
+		tab.button_pressed = zone == selected_zone
+		tab.text = str(Museum.ZONES[zone].label) if unlocked else "%s · 锁" % str(Museum.ZONES[zone].label)
+		tab.add_theme_stylebox_override("normal", UI.panel(Palette.TEAL_SHADOW if zone == selected_zone else Palette.DEEP_SLATE,
+			UI.ACCENT if zone == selected_zone else UI.BORDER, 8, 2))
+	_remove_list_children(_item_list)
+	_item_buttons.clear()
+	if rows.is_empty():
+		var empty := _label("还没有藏品\n\n出舱带回完整物品，\n安全回舱后再来看看。", 20, UI.MUTED)
+		empty.name = "EmptyCollection"
+		_item_list.add_child(empty)
+	for row: Dictionary in rows:
+		var key := str(row.key)
+		var level := int(row.get("level", 1))
+		var need := int(row.get("need", 0))
+		var progress := "已满级" if need <= 0 else "经验 %d / %d" % [int(row.get("xp", 0)), need]
+		var slot := int(row.get("slot", -1))
+		var where := "已陈列" if slot >= 0 else "未陈列"
+		var button := _button("", "Item_" + key, select_item.bind(key))
+		button.text = "%s\nLv.%d  ·  %s" % [str(row.get("label", "藏品")), level, progress]
+		button.icon = _swatch(row.get("icon_color", Palette.BONE))
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		button.custom_minimum_size.y = 72
-		button.add_theme_stylebox_override("normal", UI.panel(Color("#1b3d43") if uid == selected_uid else Color("#182b3c"), UI.ACCENT if uid == selected_uid else UI.BORDER, 10, 9))
-		_warehouse_list.add_child(button)
-	_remove_list_children(_catalogue_list)
-	for index in range(CATEGORY_KEYS.size()):
-		var key: String = CATEGORY_KEYS[index]
-		var registered := exhibits.has(key)
-		var entry: Dictionary = exhibits.get(key, {})
-		var position := slots.find(key)
-		var status := "展台 %02d" % (position + 1) if position >= 0 else "未陈列"
-		var text := "%s\nLv.%d  ·  %s" % [str(entry.get("label", CATEGORY_NAMES[index])), int(entry.get("level", 0)), status] if registered else "未发现\n等待下一次远征"
-		var button := _button(text, "Catalogue_" + key, select_exhibit.bind(key))
-		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		button.custom_minimum_size.y = 72
-		button.disabled = not registered
-		button.add_theme_stylebox_override("normal", UI.panel(Color("#1b3d43") if key == selected_key else Color("#182b3c"), UI.ACCENT if key == selected_key else UI.BORDER, 10, 9))
-		_catalogue_list.add_child(button)
-	for index in range(_stand_buttons.size()):
-		var enabled := index < capacity
-		var key := str(slots[index]) if index < slots.size() else ""
-		var button := _stand_buttons[index]
-		button.disabled = not enabled
-		button.text = "%02d%s" % [index + 1, "" if enabled else " · 锁"]
-		button.tooltip_text = str(exhibits.get(key, {}).get("label", "空展台")) if enabled else "升级展馆容量后开放"
-		button.add_theme_stylebox_override("normal", UI.panel(Color("#23554d") if index == selected_stand else Color("#213347"), UI.ACCENT if index == selected_stand else UI.BORDER, 6, 8))
-	_clear_button.disabled = _pending or selected_stand >= slots.size() or str(slots[selected_stand]).is_empty()
+		button.tooltip_text = where
+		button.add_theme_stylebox_override("normal", UI.panel(Palette.TEAL_SHADOW if key == selected_key else Palette.DEEP_SLATE,
+			UI.ACCENT if key == selected_key else UI.BORDER, 10, 2))
+		if slot >= 0:
+			var tag := Label.new()
+			tag.name = "ExhibitTag_" + key
+			tag.text = "展出中"
+			tag.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			tag.add_theme_font_size_override("font_size", 14)
+			tag.add_theme_color_override("font_color", Palette.CYAN_LIGHT)
+			tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+			tag.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			button.add_child(tag)
+			tag.set_anchors_and_offsets_preset(Control.PRESET_CENTER_RIGHT)
+			tag.offset_left = -72
+			tag.offset_right = -12
+			tag.offset_top = -12
+			tag.offset_bottom = 12
+		_item_list.add_child(button)
+		_item_buttons[key] = button
+	_stand_header.text = Museum.zone_label(selected_zone)
+	var stand_key := str(slots[selected_stand]) if selected_stand >= 0 and selected_stand < slots.size() else ""
+	_stand_selection.text = str(exhibits.get(stand_key, {}).get("label", "空展台")) if selected_stand >= 0 else "点击 3D 展台选择"
 	_income.text = "展览上限  +%d / 趟" % int(museum.get("income", 0))
-	_display.set_collection(museum)
-	_display.select_stand(selected_stand)
 	_refresh_details()
 	_message.text = str(_state.message).get_slice("\n", 0)
 	if _message.text.is_empty():
-		_message.text = "登记展品获得研究点；重复件可研究升级，出售则换取现金。"
+		_message.text = "选中藏品与展台后，展台上会预览模型；安装后计入每趟展览收益。"
 	_message.tooltip_text = str(_state.message)
 	_layout.call_deferred()
+	_notify_stand_selected()
 
-func _displayed_count(slots: Array) -> int:
-	var count := 0
-	for key: Variant in slots:
-		if not str(key).is_empty():
-			count += 1
-	return count
+func _notify_stand_selected() -> void:
+	# Always publish the current target. The hall de-duplicates identical focus
+	# requests itself, so a refresh after an external reset still re-focuses.
+	stand_selected.emit(selected_stand)
+	zone_selected.emit(selected_zone)
+	item_selected.emit(selected_key)
 
 func _refresh_details() -> void:
-	_donate_button.visible = _tab == "warehouse"
-	_sell_button.visible = _tab == "warehouse"
-	_place_button.visible = _tab == "catalogue"
-	if _tab == "catalogue":
-		var exhibits: Dictionary = _museum().get("exhibits", {})
-		var entry: Dictionary = exhibits.get(selected_key, {})
-		var item: Dictionary = entry.get("item", {})
-		_detail_name.text = str(entry.get("label", "等待新的发现"))
-		_detail_info.text = "Lv.%d  ·  累计研究 %d 件\n磨损 %d%%  ·  已登记展品" % [int(entry.get("level", 1)), int(entry.get("count", 1)), int(item.get("wear", 0))] if not entry.is_empty() else "完整带回并登记物品后，\n它会出现在仓库的展品列表中。"
-		_place_button.text = "放到展台 %02d" % (selected_stand + 1)
-		_place_button.disabled = _pending or entry.is_empty()
-		return
-	var item := _warehouse_item()
-	_donate_button.disabled = _pending or item.is_empty()
-	_sell_button.disabled = _pending or item.is_empty()
-	if item.is_empty():
-		_detail_name.text = "选择一件发现"
-		_detail_info.text = "登记后可用于布展，\n出售换取下一趟的资金。"
-		_donate_button.text = "登记展品"
-		_sell_button.text = "出售"
-		return
-	_detail_name.text = _item_name(item)
-	var price := "估价 %d" % _worth(item) if _known(item) else "售价？ · 首次出售或登记后揭晓"
-	_detail_info.text = "磨损 %d%%  ·  完整度 %d%%\n%s" % [int(item.get("wear", 0)), 100 - int(item.get("wear", 0)), price]
-	var exhibits: Dictionary = _museum().get("exhibits", {})
-	var entry: Dictionary = exhibits.get(_key_for_item(item), {})
-	_donate_button.text = "登记展品  +1 研究点"
-	if not entry.is_empty():
-		if int(entry.get("level", 1)) < int(_museum().get("max_level", 3)):
-			_donate_button.text = "研究升级  Lv.%d → %d" % [int(entry.level), int(entry.level) + 1]
+	var slots: Array = _museum().get("slots", [])
+	var stand_key := str(slots[selected_stand]) if selected_stand >= 0 and selected_stand < slots.size() else ""
+	var occupied := _row_for(stand_key) if not stand_key.is_empty() else {}
+	var staged := _row_for(selected_key) if not selected_key.is_empty() else {}
+	_action_mode = ""
+	if not staged.is_empty():
+		if selected_stand < 0:
+			_action_button.text = "选择展台"
+			_show_item(staged, "待安装")
+		elif stand_key == selected_key:
+			_action_mode = "clear"
+			_action_button.text = "拆卸"
+			_show_item(staged, "已陈列")
+		elif stand_key.is_empty():
+			_action_mode = "place"
+			_action_button.text = "安装"
+			_show_item(staged, "待安装")
 		else:
-			var current_item: Dictionary = entry.get("item", {})
-			if int(item.get("wear", 0)) < int(current_item.get("wear", 0)):
-				_donate_button.text = "替换更好品相"
-			else:
-				_donate_button.text = "展品已满级"
-				_donate_button.disabled = true
-	_sell_button.text = "出售  %d" % _worth(item) if _known(item) else "出售并鉴定"
+			_action_mode = "place"
+			_action_button.text = "替换"
+			_show_item(staged, "将替换当前藏品")
+	elif occupied.is_empty():
+		if selected_stand < 0:
+			_action_button.text = "选择展台"
+			_detail_name.text = "选择一件藏品"
+			_detail_info.text = "点击 3D 展台查看陈列，
+再从左侧选择藏品安装。"
+		else:
+			_action_button.text = "空展台"
+			_detail_name.text = "空展台"
+			_detail_info.text = "从左侧选择藏品后安装到此展台。"
+		_detail_bar.value = 0
+		_detail_xp.text = ""
+	else:
+		_action_mode = "clear_display"
+		_action_button.text = "拆卸"
+		_show_item(occupied, "当前陈列")
+	_action_button.disabled = _pending or _action_mode.is_empty()
 
-func select_warehouse_item(uid: int) -> void:
-	selected_uid = uid
-	_tab = "warehouse"
+func _show_item(row: Dictionary, state: String) -> void:
+	var level := int(row.get("level", 1))
+	var need := int(row.get("need", 0))
+	var xp := int(row.get("xp", 0))
+	_detail_name.text = "%s  ×%d" % [str(row.get("label", "藏品")), int(row.get("copies", 0))]
+	_detail_info.text = "Lv.%d  ·  %s
+展台收益 +%d / 趟" % [level, state, int(row.get("income", 0))]
+	_detail_bar.max_value = maxi(need, 1)
+	_detail_bar.value = xp if need > 0 else 1
+	_detail_xp.text = "已满级" if need <= 0 else "经验 %d / %d" % [xp, need]
+
+func select_item(key: String) -> void:
+	if not _museum().get("exhibits", {}).has(key):
+		return
+	selected_key = key
+	feedback.emit("ui_click")
+	_refresh()
+
+func select_zone(zone: int) -> void:
+	var capacity := int(_museum().get("capacity", 6))
+	if zone < 0 or zone >= Museum.ZONE_COUNT or zone * Museum.ZONE_SIZE >= capacity:
+		return
+	selected_zone = zone
 	feedback.emit("ui_click")
 	_refresh()
 
 func show_warehouse() -> void:
-	_tab = "warehouse"
 	_refresh()
 
 func inspect_stand(slot: int) -> void:
 	var museum := _museum()
-	if slot < 0 or slot >= int(museum.get("capacity", 3)):
+	if slot < 0 or slot >= int(museum.get("capacity", 6)):
 		return
 	selected_stand = slot
-	_tab = "catalogue"
-	var slots: Array = museum.get("slots", [])
-	var key := str(slots[slot]) if slot < slots.size() else ""
-	if not key.is_empty() and museum.get("exhibits", {}).has(key):
-		selected_key = key
+	selected_key = ""
+	selected_zone = clampi(slot / Museum.ZONE_SIZE, 0, Museum.ZONE_COUNT - 1)
 	_refresh()
 
-func select_exhibit(key: String) -> void:
-	if not _museum().get("exhibits", {}).has(key):
+func _step_stand(direction: int) -> void:
+	var capacity := int(_museum().get("capacity", 6))
+	if capacity <= 0:
 		return
-	selected_key = key
-	_tab = "catalogue"
-	feedback.emit("ui_click")
-	_refresh()
+	var next := 0 if direction > 0 else capacity - 1
+	if selected_stand >= 0:
+		next = posmod(selected_stand + direction, capacity)
+	select_stand(next)
 
 func select_stand(slot: int) -> void:
-	var capacity := int(_museum().get("capacity", 3))
+	var capacity := int(_museum().get("capacity", 6))
 	if slot < 0 or slot >= capacity:
 		return
 	selected_stand = slot
+	selected_key = ""
+	selected_zone = clampi(slot / Museum.ZONE_SIZE, 0, Museum.ZONE_COUNT - 1)
 	feedback.emit("ui_click")
 	_refresh()
 
-func _request_donate() -> void:
-	if not is_open or _donate_button.disabled or _pending:
+func _request_action() -> void:
+	if not is_open or _action_button.disabled or _pending or _action_mode.is_empty():
 		return
 	_pending = true
-	_refresh_details()
-	donate_requested.emit(selected_uid)
-
-func _request_sell() -> void:
-	if not is_open or _sell_button.disabled or _pending:
-		return
-	_pending = true
-	_refresh_details()
-	sell_requested.emit(selected_uid)
-
-func _request_place() -> void:
-	if not is_open or _place_button.disabled or _pending:
-		return
-	_pending = true
-	_refresh_details()
-	place_requested.emit(selected_key, selected_stand)
-
-func _request_clear() -> void:
-	if not is_open or _clear_button.disabled or _pending:
-		return
-	_pending = true
-	_clear_button.disabled = true
-	place_requested.emit("", selected_stand)
-
-func _room_input(event: InputEvent) -> void:
-	if not is_open or event.device == InputEvent.DEVICE_ID_EMULATION:
-		return
-	if event is InputEventMouseMotion and event.button_mask & MOUSE_BUTTON_MASK_LEFT:
-		_room_pointer_dragged = _room_pointer_dragged or event.position.distance_to(_room_pointer_start) > 6.0
-		if _room_pointer_dragged:
-			_display.orbit(-event.relative.x * 0.003)
-		_viewport_container.accept_event()
-	elif event is InputEventScreenDrag:
-		if _room_touch_index >= 0 and event.index != _room_touch_index:
-			return
-		_room_pointer_dragged = true
-		_display.orbit(-event.relative.x * 0.003)
-		_viewport_container.accept_event()
-	elif event is InputEventScreenTouch:
-		if event.pressed and _room_touch_index < 0:
-			_room_touch_index = event.index
-			_begin_room_pointer(event.position)
-		elif not event.pressed and event.index == _room_touch_index:
-			_end_room_pointer(event.position)
-			_room_touch_index = -1
-		_viewport_container.accept_event()
-	elif event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			if event.pressed:
-				_begin_room_pointer(event.position)
-			else:
-				_end_room_pointer(event.position)
-		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			_display.zoom(-0.35)
-		elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			_display.zoom(0.35)
-		_viewport_container.accept_event()
-
-func _begin_room_pointer(at: Vector2) -> void:
-	_room_pointer_down = true
-	_room_pointer_dragged = false
-	_room_pointer_start = at
-
-func _end_room_pointer(at: Vector2) -> void:
-	if _room_pointer_down and not _room_pointer_dragged and at.distance_to(_room_pointer_start) <= 6.0:
-		var ratio := Vector2(_viewport.size) / _viewport_container.size.max(Vector2.ONE)
-		_display.handle_pointer(at * ratio)
-	_room_pointer_down = false
+	_action_button.disabled = true
+	if _action_mode == "place":
+		place_requested.emit(selected_key, selected_stand)
+	else:
+		place_requested.emit("", selected_stand)
 
 func _input(event: InputEvent) -> void:
 	if not is_open or not event is InputEventKey:

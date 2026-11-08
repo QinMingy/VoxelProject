@@ -50,7 +50,7 @@ func run() -> void:
 		require(game.crystals.size() == Main.CRYSTAL_COUNT, "compact map keeps requested crystal count")
 		for item in game.crystals:
 			require(Vector2(item.position.x, item.position.z).length() <= radius - 1.0, "all collectible specimens are inside the warning boundary")
-			require(Vector2(item.position.x - Main.LANDER.x, item.position.z - Main.LANDER.z).length() >= 2.8, "crystals cannot spawn inside the lander")
+			require(Vector2(item.position.x - Main.LANDER.x, item.position.z - Main.LANDER.z).length() >= Main.MIN_SPACING, "crystals cannot spawn inside the lander")
 			for cell: Vector3i in item.get_world_cells():
 				var center: Vector3 = game.terrain.cell_center(cell)
 				var far_x := absf(center.x) + Main.Terrain.CELL_SIZE * 0.5
@@ -80,7 +80,7 @@ func run() -> void:
 	require(game.boundary_warning.visible, "warning resumes after backpack closes")
 	var env: Environment = game.world_environment.environment
 	require(env.fog_enabled and env.fog_mode == Environment.FOG_MODE_DEPTH, "compatible depth fog is enabled")
-	require(env.fog_depth_begin >= 10.0 and env.fog_depth_end > env.fog_depth_begin, "near excavation remains outside distance fog")
+	require(env.fog_depth_begin >= Main.FOG_BEGIN and env.fog_depth_end > env.fog_depth_begin, "near excavation remains outside distance fog")
 	if DisplayServer.get_name() != "headless":
 		game.spawn_crystals(11235)
 		await preview(game, Vector3.ZERO, -PI * 0.5, "compact-moon-fog")

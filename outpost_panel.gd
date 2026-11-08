@@ -8,6 +8,7 @@ signal display_slot_requested(slot: int)
 
 const UI = preload("res://ui_style.gd")
 const LobbyPanel = preload("res://museum_lobby_panel.gd")
+const Palette = preload("res://palette.gd")
 
 # Menu art only. The playable terrain and relics remain in the main world.
 class MoonSection extends Control:
@@ -25,10 +26,10 @@ class MoonSection extends Control:
 		var scale_factor := minf(size.x / 420.0, size.y / 380.0)
 		draw_set_transform(origin, 0, Vector2.ONE * scale_factor)
 		for radius in [140.0, 177.0, 211.0]:
-			draw_arc(Vector2.ZERO, radius, 0, TAU, 96, Color("#233648"), 1.0, true)
+			draw_arc(Vector2.ZERO, radius, 0, TAU, 96, Palette.DEEP_SLATE, 1.0, true)
 		for i in range(28):
 			var angle := i * TAU / 28.0
-			draw_line(Vector2.from_angle(angle) * 196, Vector2.from_angle(angle) * 201, Color("#3c5265"), 1, true)
+			draw_line(Vector2.from_angle(angle) * 196, Vector2.from_angle(angle) * 201, Palette.SLATE, 1, true)
 		var pulse := Vector2.from_angle(phase) * 177
 		draw_circle(pulse, 4.0, UI.ACCENT)
 		for y in range(-2, 3):
@@ -41,16 +42,16 @@ class MoonSection extends Control:
 				var top := PackedVector2Array([point + Vector2(0, -height - 15), point + Vector2(31, -height), point + Vector2(0, -height + 15), point + Vector2(-31, -height)])
 				var left := PackedVector2Array([top[3], top[2], point + Vector2(0, 55), point + Vector2(-31, 40)])
 				var right := PackedVector2Array([top[2], top[1], point + Vector2(31, 40), point + Vector2(0, 55)])
-				draw_colored_polygon(left, Color("#3b4c62"))
-				draw_colored_polygon(right, Color("#2d3c50"))
-				draw_colored_polygon(top, Color("#5d738d") if not pit else Color("#344b5b"))
-				draw_polyline(PackedVector2Array([top[0], top[1], top[2], top[3], top[0]]), Color("#70859b"), 1.0, true)
+				draw_colored_polygon(left, Palette.SLATE)
+				draw_colored_polygon(right, Palette.DEEP_SLATE)
+				draw_colored_polygon(top, Palette.MOON_BLUE if not pit else Palette.SLATE)
+				draw_polyline(PackedVector2Array([top[0], top[1], top[2], top[3], top[0]]), Palette.MOON_BLUE, 1.0, true)
 		# A warm cluster in the cutaway is the focus of the menu artwork.
 		for offset in [Vector2(25, -24), Vector2(43, -10), Vector2(8, -7)]:
 			var crystal := PackedVector2Array([offset + Vector2(0, -43), offset + Vector2(14, -21), offset + Vector2(12, 8), offset + Vector2(-9, 14), offset + Vector2(-13, -19)])
-			draw_colored_polygon(crystal, Color("#d5a259"))
-			draw_colored_polygon(PackedVector2Array([crystal[0], crystal[1], crystal[2], offset]), Color("#f6ce88"))
-		draw_dashed_line(Vector2(-156, 110), Vector2(154, 110), Color("#496a79"), 1.0, 5.0, true)
+			draw_colored_polygon(crystal, Palette.AMBER)
+			draw_colored_polygon(PackedVector2Array([crystal[0], crystal[1], crystal[2], offset]), Palette.AMBER_LIGHT)
+		draw_dashed_line(Vector2(-156, 110), Vector2(154, 110), Palette.SLATE, 1.0, 5.0, true)
 		draw_circle(Vector2(154, 110), 3, UI.ACCENT)
 		draw_set_transform(Vector2.ZERO)
 
@@ -85,20 +86,27 @@ func _ready() -> void:
 	_layout()
 
 func open(next_page: String = "lobby") -> void:
-	page = next_page if _pages.has(next_page) else "lobby"
+	var was_open := is_open
+	var same_exhibition := was_open and page in ["lobby", "museum"] and next_page in ["lobby", "museum"]
+	page = next_page if next_page in ["title", "lobby", "museum", "report"] else "lobby"
 	is_open = true
 	_refresh()
 	_modal.show()
 	_layout()
 	if is_instance_valid(_tween):
 		_tween.kill()
-	var entrance: Control = lobby if page == "lobby" else _body
-	entrance.modulate.a = 0.0
-	_tween = create_tween().set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
-	_tween.tween_property(entrance, "modulate:a", 1.0, 0.25)
-	var focus_name := "EnterOutpostButton" if page == "title" else ("ExpeditionsButton" if page == "lobby" else "ReportBackButton")
-	(_modal.find_child(focus_name, true, false) as Button).grab_focus()
-	opened.emit()
+	if not same_exhibition:
+		var entrance: Control = lobby if page in ["lobby", "museum"] else _body
+		entrance.modulate.a = 0.0
+		_tween = create_tween().set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+		_tween.tween_property(entrance, "modulate:a", 1.0, 0.25)
+	else:
+		lobby.modulate.a = 1.0
+	if page != "museum":
+		var focus_name := "EnterOutpostButton" if page == "title" else ("ExpeditionsButton" if page == "lobby" else "ReportBackButton")
+		(_modal.find_child(focus_name, true, false) as Button).grab_focus()
+	if not was_open:
+		opened.emit()
 
 func close() -> void:
 	if not is_open:
@@ -119,6 +127,9 @@ func sync_state(data: Dictionary) -> void:
 
 func _input(event: InputEvent) -> void:
 	if not is_open or not event is InputEventKey or not event.pressed or event.echo:
+		return
+	# The warehouse overlay owns its keys while the same room remains visible.
+	if page == "museum":
 		return
 	if event.physical_keycode == KEY_ESCAPE:
 		if page == "report":
@@ -142,7 +153,7 @@ func _build() -> void:
 	_modal.theme = UI.theme()
 	add_child(_modal)
 	var background := ColorRect.new()
-	background.color = Color("#0b1522")
+	background.color = Palette.INK
 	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_modal.add_child(background)
 	_window = MarginContainer.new()
@@ -172,7 +183,7 @@ func _build() -> void:
 	left.size_flags_stretch_ratio = 1.25
 	_body.add_child(left)
 	_build_title(left)
-	_build_lobby(left)
+	_build_exhibition()
 	_build_report(left)
 	var right := VBoxContainer.new()
 	right.custom_minimum_size.x = 360
@@ -227,11 +238,10 @@ func _build_title(parent: Control) -> void:
 	box.add_child(_button("退出游戏", "QuitButton", func() -> void: get_tree().quit()))
 	box.add_spacer(false)
 
-func _build_lobby(_parent: Control) -> void:
+func _build_exhibition() -> void:
 	lobby = LobbyPanel.new()
 	lobby.name = "LobbyPage"
 	_modal.add_child(lobby)
-	_pages.lobby = lobby
 	lobby.navigate_requested.connect(func(destination: String) -> void: navigate_requested.emit(destination))
 	lobby.slot_requested.connect(func(slot: int) -> void: display_slot_requested.emit(slot))
 
@@ -278,13 +288,16 @@ func _refresh() -> void:
 	_help.text = "左摇杆移动 · 右侧拖动视角\n按住开采并拖动 · 拾取完整物品\n舱边点交互返航 · 背包内点选和旋转" if _state.touch_mode else "WASD 移动 · 空格 跳跃 · V 切换视角\n长按左键挖土 · F 拾取 · E 回舱\nB 背包 · H 帮助 · G 调试"
 	for key: String in _pages:
 		_pages[key].visible = key == page
-	_window.visible = page != "lobby"
-	var debug_parent: Control = lobby.utility_row if page == "lobby" else _menu_footer
+	var exhibition := page in ["lobby", "museum"]
+	lobby.visible = exhibition
+	_window.visible = not exhibition
+	var debug_parent: Control = lobby.utility_row if exhibition else _menu_footer
 	if _debug_button.get_parent() != debug_parent:
 		_debug_button.reparent(debug_parent)
 	lobby.sync_state(_state)
-	lobby.set_active(is_open and page == "lobby")
-	_page_title.text = "月面采掘" if page == "title" else ("月面前哨站  /  大厅" if page == "lobby" else "月面前哨站  /  收获记录")
+	lobby.set_management_mode(page == "museum")
+	lobby.set_active(is_open and exhibition)
+	_page_title.text = "月面采掘" if page == "title" else "月面前哨站  /  收获记录"
 	_balance.text = "资金 %d  ·  研究 %d" % [int(_state.bank), int(_state.research_points)]
 	var stats: Dictionary = _state.stats
 	_equipment.text = "氧气 %ds  ·  背包 %d×%d\n开采 %.2fs  ·  探测 %dm" % [int(stats.get("oxygen", 65)), int(stats.get("bag_columns", 4)), int(stats.get("bag_rows", 4)), float(stats.get("mining_time", 0.9)), int(stats.get("detector_range", 10))]

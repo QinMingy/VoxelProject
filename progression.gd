@@ -1,9 +1,10 @@
 extends RefCounted
 
 const Museum = preload("res://museum.gd")
-const PROFILE_VERSION := 5
+const PROFILE_VERSION := 7
 const DEFAULT_BANK := 150
 const MAX_BANK := 10_000_000
+const MAX_TRIP_SERIAL := 2_000_000_000
 const DEFAULT_ZONE := "meadow"
 const MAX_ACTIVITY_RADIUS := 26.0
 const OXYGEN_RECOVERY_LIMITS := [6.0, 10.0, 16.0, 24.0]
@@ -42,12 +43,12 @@ const UPGRADES := {
 		"values": [14.0, 18.0, 22.0, 26.0], "costs": [140, 450, 1100],
 	},
 	"museum_capacity": {
-		"name": "展台扩建", "description": "增加可同时展示的藏品数量。",
-		"values": [3, 4, 6], "costs": [600, 1800],
+		"name": "展台扩建", "description": "按展区增加可同时展示的藏品数量。",
+		"values": [6, 12, 24, 36, 48], "costs": [600, 1800, 3600, 6000],
 	},
 	"museum_appeal": {
 		"name": "展馆吸引力", "description": "用展品研究成果提高展览收益，下一趟出发时生效。",
-		"values": [1.0, 1.35, 1.75, 2.25], "costs": [0, 0, 0], "research_costs": [3, 6, 9],
+		"values": [1.0, 1.35, 1.75, 2.25], "costs": [0, 0, 0], "research_costs": [10, 20, 30],
 	},
 }
 
@@ -56,19 +57,19 @@ const ZONES := [
 		"id": "meadow", "name": "月壤浅滩", "fee": 0, "count": 72,
 		"description": "免费进场。晶簇大小分布均衡，适合积累资金。",
 		"size_weights": [0.45, 0.35, 0.20], "burial": [0.10, 0.38], "exposed": 0.28,
-		"wear_range": [0, 65], "relic_fraction": 0.20,
+		"relic_fraction": 0.20,
 	},
 	{
 		"id": "salvage", "name": "碎晶洼地", "fee": 60, "count": 90,
-		"description": "小件密集、露头多；磨损不高于 55%，适合快速装包。",
+		"description": "小件密集、露头多，适合快速装包。",
 		"size_weights": [0.65, 0.28, 0.07], "burial": [0.06, 0.24], "exposed": 0.40,
-		"wear_range": [0, 55], "relic_fraction": 0.18,
+		"relic_fraction": 0.18,
 	},
 	{
 		"id": "deep", "name": "深埋矿脉", "fee": 120, "count": 48,
-		"description": "大件和遗物较多、埋得更深；磨损不高于 30%，带回的品相更好。",
+		"description": "大件和遗物较多、埋得更深。",
 		"size_weights": [0.15, 0.30, 0.55], "burial": [0.35, 0.70], "exposed": 0.08,
-		"wear_range": [0, 30], "relic_fraction": 0.33,
+		"relic_fraction": 0.33,
 	},
 ]
 
@@ -80,6 +81,7 @@ var trip_serial := 0
 var active_trip: Dictionary = {}
 var selected_zone := DEFAULT_ZONE
 var last_report: Dictionary = {}
+var touch_layout: Dictionary = {}
 var last_save_error: Error = OK
 var profile_path: String:
 	get:
@@ -103,46 +105,131 @@ func load_profile() -> Error:
 		return _block_save(ERR_FILE_CORRUPT if error == ERR_PARSE_ERROR else error)
 
 	var version: Variant = config.get_value("profile", "version", 0)
+	if not version is int or version < 1 or version > PROFILE_VERSION:
+		return _block_save(ERR_FILE_CORRUPT)
+	if version < PROFILE_VERSION and version < 6:
+		# The collection model changed to one specimen per type with experience.
+		# Keep the retired profile beside the live one and start a fresh run.
+		_archive_retired_profile(int(version))
+		_reset_profile()
+		_blocked_save_error = OK
+		last_save_error = OK
+		return OK
 	var saved_bank: Variant = config.get_value("profile", "bank", -1)
 	var saved_levels: Variant = config.get_value("profile", "levels", {})
 	var saved_zone: Variant = config.get_value("profile", "selected_zone", "")
 	var saved_report: Variant = config.get_value("profile", "last_report", {})
-	if not version is int or version not in [1, 2, 3, 4, PROFILE_VERSION]:
-		return _block_save(ERR_FILE_CORRUPT)
 	if not _is_valid_profile(saved_bank, saved_levels, saved_zone, saved_report, version):
 		return _block_save(ERR_FILE_CORRUPT)
 
 	var migrated_levels: Dictionary = saved_levels.duplicate(true)
-	if version == 1:
-		migrated_levels["oxygen_supply"] = 0
-	if version <= 2:
-		migrated_levels["excavation_range"] = 0
-	if version <= 3:
-		migrated_levels["museum_capacity"] = 0
-		migrated_levels["museum_appeal"] = 0
-	if version <= 4:
-		migrated_levels["mining_radius"] = 0
 	var saved_research: Variant = config.get_value("profile", "research_points", 0)
 	var saved_museum: Variant = config.get_value("profile", "museum", Museum.initial_state())
 	var saved_serial: Variant = config.get_value("profile", "trip_serial", 0)
 	var saved_trip: Variant = config.get_value("profile", "active_trip", {})
-	if version >= 4:
-		for key: String in ["research_points", "museum", "trip_serial", "active_trip"]:
-			if not config.has_section_key("profile", key):
-				return _block_save(ERR_FILE_CORRUPT)
-		if not _valid_extended(saved_research, saved_museum, saved_serial, saved_trip, migrated_levels):
+	for key: String in ["research_points", "museum", "trip_serial", "active_trip"]:
+		if not config.has_section_key("profile", key):
 			return _block_save(ERR_FILE_CORRUPT)
+	if version == 6:
+		# Stands grew from six to four zones of twelve. Keep the collection and
+		# the purchased capacity tier; only the slot array is extended.
+		_archive_retired_profile(6)
+		migrated_levels["museum_capacity"] = clampi(int(migrated_levels.get("museum_capacity", 0)), 0,
+			UPGRADES.museum_capacity["values"].size() - 1)
+		saved_museum = _migrate_v6_museum(saved_museum)
+	if not _valid_extended(saved_research, saved_museum, saved_serial, saved_trip, migrated_levels):
+		return _block_save(ERR_FILE_CORRUPT)
 	bank = saved_bank
 	levels = migrated_levels
-	research_points = int(saved_research) if version >= 4 else 0
-	museum_state = saved_museum.duplicate(true) if version >= 4 else Museum.initial_state()
-	trip_serial = int(saved_serial) if version >= 4 else 0
-	active_trip = saved_trip.duplicate(true) if version >= 4 else {}
+	research_points = int(saved_research)
+	museum_state = saved_museum.duplicate(true)
+	trip_serial = int(saved_serial)
+	active_trip = saved_trip.duplicate(true)
 	selected_zone = saved_zone
 	last_report = saved_report
+	var saved_layout: Variant = config.get_value("profile", "touch_layout", {})
+	if not _valid_touch_layout(saved_layout):
+		return _block_save(ERR_FILE_CORRUPT)
+	touch_layout = _sanitize_touch_layout(saved_layout)
 	_blocked_save_error = OK
 	last_save_error = OK
 	return OK
+
+func _archive_retired_profile(version: int) -> void:
+	var backup := "%s.v%d.bak" % [_save_path, version]
+	if not FileAccess.file_exists(backup):
+		DirAccess.copy_absolute(_save_path, backup)
+
+func _valid_touch_layout(value: Variant) -> bool:
+	if not value is Dictionary or value.size() > 16:
+		return false
+	for key: Variant in value:
+		if not key is String:
+			return false
+		var entry: Variant = value[key]
+		if not entry is Dictionary or entry.size() != 3:
+			return false
+		if not entry.has("x") or not entry.has("y") or not entry.has("scale"):
+			return false
+		for field: String in ["x", "y", "scale"]:
+			var number: Variant = entry[field]
+			if not (number is float or number is int):
+				return false
+			if not is_finite(float(number)):
+				return false
+		var x := float(entry.x)
+		var y := float(entry.y)
+		var scale := float(entry.scale)
+		if x < 0.0 or x > 1.0 or y < 0.0 or y > 1.0 or scale < 0.5 or scale > 2.0:
+			return false
+	return true
+
+func _sanitize_touch_layout(layout: Dictionary) -> Dictionary:
+	var result := {}
+	if layout.size() > 16:
+		return result
+	for key: Variant in layout:
+		if not key is String:
+			continue
+		var entry: Variant = layout[key]
+		if not entry is Dictionary:
+			continue
+		var x: Variant = entry.get("x")
+		var y: Variant = entry.get("y")
+		var scale: Variant = entry.get("scale", 1.0)
+		if not (x is float or x is int) or not (y is float or y is int) or not (scale is float or scale is int):
+			continue
+		result[key] = {"x": clampf(float(x), 0.0, 1.0), "y": clampf(float(y), 0.0, 1.0),
+			"scale": clampf(float(scale), 0.5, 2.0)}
+	return result
+
+func set_touch_layout(layout: Dictionary) -> Dictionary:
+	var previous := touch_layout
+	touch_layout = _sanitize_touch_layout(layout)
+	if _commit(bank, levels, selected_zone, last_report, research_points, museum_state) != OK:
+		touch_layout = previous
+		return _failed_transaction("按键布局保存失败，原布局已保留")
+	return {"ok": true, "message": "按键布局已保存"}
+
+func _migrate_v6_museum(saved: Variant) -> Dictionary:
+	var museum: Dictionary = saved.duplicate(true) if saved is Dictionary else Museum.initial_state()
+	var slots: Array = museum.get("slots", [])
+	var migrated: Array = []
+	for index in range(Museum.STAND_COUNT):
+		migrated.append(str(slots[index]) if index < slots.size() else "")
+	museum["slots"] = migrated
+	return museum
+
+func _reset_profile() -> void:
+	bank = DEFAULT_BANK
+	levels = {"drill": 0, "mining_radius": 0, "oxygen": 0, "oxygen_supply": 0, "boots": 0, "backpack": 0, "detector": 0, "excavation_range": 0, "museum_capacity": 0, "museum_appeal": 0}
+	research_points = 0
+	museum_state = Museum.initial_state()
+	trip_serial = 0
+	active_trip = {}
+	selected_zone = DEFAULT_ZONE
+	last_report = {}
+	touch_layout = {}
 
 func _block_save(error: Error) -> Error:
 	_blocked_save_error = error
@@ -291,7 +378,7 @@ func pay_entry(id: String, free_entry: bool = false) -> Dictionary:
 	var fee: int = 0 if free_entry else zone.fee
 	if bank < fee:
 		return {"ok": false, "message": "入场资金不足，还差 %d" % (fee - bank), "fee": fee, "zone": zone}
-	if trip_serial >= Museum.MAX_UID:
+	if trip_serial >= MAX_TRIP_SERIAL:
 		return {"ok": false, "message": "远征编号达到上限", "fee": fee, "zone": zone}
 	var next_trip := {"trip_id": trip_serial + 1, "fee": fee, "zone": str(zone.name), "zone_id": id, "income_snapshot": int(museum_summary().income)}
 	if _commit(bank - fee, levels, id, last_report, research_points, museum_state, trip_serial + 1, next_trip) != OK:
@@ -341,24 +428,6 @@ func museum_summary() -> Dictionary:
 	var current := stats()
 	return Museum.summary(museum_state, int(current.museum_capacity), float(current.museum_appeal), research_points)
 
-func donate_item(uid: int) -> Dictionary:
-	var plan := Museum.plan_donation(museum_state, uid, int(stats().museum_capacity))
-	if not plan.ok:
-		return plan
-	if _commit(bank, levels, selected_zone, last_report, research_points + int(plan.research), plan.state) != OK:
-		return _failed_transaction("登记保存失败，物品仍在仓库待整理区")
-	return {"ok": true, "message": plan.message, "research": int(plan.research), "key": plan.key, "replaced": plan.replaced}
-
-func sell_item(uid: int) -> Dictionary:
-	var plan := Museum.plan_sale(museum_state, uid)
-	if not plan.ok:
-		return plan
-	if int(plan.income) > MAX_BANK - bank:
-		return {"ok": false, "message": "资金达到上限，物品仍在仓库", "error": ERR_INVALID_PARAMETER}
-	if _commit(bank + int(plan.income), levels, selected_zone, last_report, research_points, plan.state) != OK:
-		return _failed_transaction("出售保存失败，物品与资金均未改变")
-	return {"ok": true, "message": plan.message, "income": int(plan.income), "item": plan.item}
-
 func place_exhibit(key: String, slot: int) -> Dictionary:
 	var plan := Museum.plan_placement(museum_state, key, slot, int(stats().museum_capacity))
 	if not plan.ok:
@@ -367,13 +436,6 @@ func place_exhibit(key: String, slot: int) -> Dictionary:
 		return _failed_transaction("布展保存失败，原展台已保留")
 	return {"ok": true, "message": plan.message}
 
-func reset_identification() -> Dictionary:
-	var next := museum_state.duplicate(true)
-	next.identified_types.clear()
-	if _commit(bank, levels, selected_zone, last_report, research_points, next) != OK:
-		return _failed_transaction("鉴定重置保存失败，原记录已保留")
-	return {"ok": true, "message": "已重置鉴定记录，仓库物品和已登记展品保留"}
-
 func settle_expedition(trip_id: int, cargo: Array, emergency: bool, active_seconds: float, extra_report: Dictionary = {}) -> Dictionary:
 	if active_trip.is_empty() or trip_id != int(active_trip.trip_id):
 		return {"ok": false, "message": "这趟远征已经结算或编号无效", "error": ERR_DOES_NOT_EXIST}
@@ -381,14 +443,17 @@ func settle_expedition(trip_id: int, cargo: Array, emergency: bool, active_secon
 		return {"ok": false, "message": "远征记录无效，物品仍在背包", "error": ERR_INVALID_PARAMETER}
 	var next_museum := museum_state.duplicate(true)
 	var stored := 0
-	var cargo_uids: Array = []
+	var changes: Array = []
+	var research_gain := 0
 	if not emergency:
-		var plan := Museum.append_cargo(museum_state, cargo)
+		var plan := Museum.plan_collect(museum_state, cargo, int(stats().museum_capacity))
 		if not plan.ok:
 			return plan
 		next_museum = plan.state
-		stored = cargo.size()
-		cargo_uids = plan.uids
+		stored = int(plan.stored)
+		changes = plan.changes
+		research_gain = int(plan.research)
+	var lost: Array = _group_lost(cargo) if emergency else []
 	var income := 0
 	if not emergency and active_seconds >= Museum.MIN_INCOME_SECONDS:
 		income = floori(float(active_trip.income_snapshot) * clampf(active_seconds / Museum.INCOME_PERIOD, 0.0, 1.0))
@@ -398,18 +463,36 @@ func settle_expedition(trip_id: int, cargo: Array, emergency: bool, active_secon
 	income -= income_overflow
 	var fee := int(active_trip.fee)
 	var text := "展馆收入 %d · 门票 %d · 净收益 %+d\n" % [income, fee, income - fee]
-	text += "%d 件物品遗落，仓库物品与已登记展品保留" % cargo.size() if emergency else "%d 件物品已存入仓库，等待登记或出售" % stored
+	text += "%d 件物品掉落，未带回仓" % cargo.size() if emergency else "%d 件物品已带回，同类自动积累经验" % stored
 	if income_overflow > 0:
 		text += "\n余额达到上限，展馆收入 %d 未入账" % income_overflow
 	if not emergency and active_seconds < Museum.MIN_INCOME_SECONDS and int(active_trip.income_snapshot) > 0:
 		text += "\n远征不足 10 秒，本次不结算展馆收入"
+	var settlement := {
+		"emergency": emergency, "kept": changes.duplicate(true), "lost": lost.duplicate(true),
+		"income": income, "fee": fee, "net": income - fee, "income_overflow": income_overflow,
+	}
 	var report := extra_report.duplicate(true)
 	report.merge({"text": text, "income": income, "fee": fee, "net": income - fee, "cargo_count": stored,
 		"lost_count": cargo.size() if emergency else 0, "emergency": emergency, "zone": str(active_trip.zone),
-		"trip_id": trip_id, "active_seconds": active_seconds, "income_overflow": income_overflow}, true)
-	if _commit(bank + income, levels, selected_zone, report, research_points, next_museum, trip_serial, {}) != OK:
+		"trip_id": trip_id, "active_seconds": active_seconds, "income_overflow": income_overflow,
+		"settlement": settlement}, true)
+	if _commit(bank + income, levels, selected_zone, report, research_points + research_gain, next_museum, trip_serial, {}) != OK:
 		return _failed_transaction("回舱保存失败，远征未结算，物品仍在背包")
-	return {"ok": true, "message": "紧急救援，已保留仓库物品与展品" if emergency else "安全回舱，物品已存入仓库", "stored": stored, "income": income, "report": report.duplicate(true), "cargo_uids": cargo_uids}
+	return {"ok": true, "message": "紧急救援，已保留仓库物品与展品" if emergency else "安全回舱，物品已归档",
+		"stored": stored, "income": income, "report": report.duplicate(true), "changes": changes, "lost": lost}
+
+func _group_lost(records: Array) -> Array:
+	var groups := {}
+	for raw: Variant in records:
+		var key := "" if not raw is Dictionary else Museum.key_for_item(raw)
+		var label := "未知物品" if key.is_empty() else str(Museum.definition(key).label)
+		var group_key := key if not key.is_empty() else "unknown"
+		var group: Dictionary = groups.get(group_key, {"key": key, "label": label, "count": 0})
+		group.count = int(group.count) + 1
+		groups[group_key] = group
+	return groups.values()
+
 
 func _failed_transaction(message: String) -> Dictionary:
 	return {"ok": false, "message": message, "error": last_save_error}
@@ -456,6 +539,7 @@ func _write_profile(next_bank: int, next_levels: Dictionary, next_zone: String, 
 	config.set_value("profile", "last_report", next_report)
 	config.set_value("profile", "research_points", next_research)
 	config.set_value("profile", "museum", next_museum)
+	config.set_value("profile", "touch_layout", touch_layout)
 	config.set_value("profile", "trip_serial", next_serial)
 	config.set_value("profile", "active_trip", next_trip)
 
@@ -468,7 +552,7 @@ func _write_profile(next_bank: int, next_levels: Dictionary, next_zone: String, 
 	return error
 
 func _is_valid_profile(saved_bank: Variant, saved_levels: Variant, saved_zone: Variant, saved_report: Variant, version: int = PROFILE_VERSION) -> bool:
-	if version not in [1, 2, 3, 4, PROFILE_VERSION]:
+	if version < 1 or version > PROFILE_VERSION:
 		return false
 	if not saved_bank is int or saved_bank < 0 or saved_bank > MAX_BANK:
 		return false
@@ -501,7 +585,7 @@ func _valid_extended(saved_research: Variant, saved_museum: Variant, saved_seria
 	var capacity := int(UPGRADES.museum_capacity["values"][int(saved_levels.get("museum_capacity", 0))])
 	if not Museum.is_valid_state(saved_museum, capacity):
 		return false
-	if not saved_serial is int or saved_serial < 0 or saved_serial > Museum.MAX_UID or not saved_trip is Dictionary:
+	if not saved_serial is int or saved_serial < 0 or saved_serial > MAX_TRIP_SERIAL or not saved_trip is Dictionary:
 		return false
 	if saved_trip.is_empty():
 		return true

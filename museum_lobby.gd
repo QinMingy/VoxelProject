@@ -6,22 +6,43 @@ const Crystal = preload("res://crystal.gd")
 const AdventureItems = preload("res://adventure_items.gd")
 const Visitor = preload("res://museum_visitor.gd")
 const VisitorComments = preload("res://museum_visitor_comments.gd")
+const Palette = preload("res://palette.gd")
 
-# Three small collections share the existing six paid exhibition slots. These
-# indices are save-game slot indices; layout must never reorder stored exhibits.
-const LOCATIONS := [Vector3(-4.6, 0, -1.7), Vector3(-2.6, 0, -1.7),
-	Vector3(2.6, 0, -1.7), Vector3(4.6, 0, -1.7),
-	Vector3(-1.05, 0, 2.25), Vector3(1.05, 0, 2.25)]
-const ZONES := [Vector3(-3.6, 0, -1.7), Vector3(3.6, 0, -1.7), Vector3(0, 0, 2.25)]
-const PEDESTAL_HEIGHT := 0.68
+# Four zones of twelve stands share one gallery. Slot indices are save-game
+# indices: zone A occupies 0–11, B 12–23, C 24–35 and D 36–47.
+const ZONE_COLS := 6
+const ZONE_ROWS := 2
+const ZONE_SIZE := ZONE_COLS * ZONE_ROWS
+const ZONE_CENTERS := [Vector3(-6.9, 0, -3.2), Vector3(6.9, 0, -3.2),
+	Vector3(-6.9, 0, 3.2), Vector3(6.9, 0, 3.2)]
+const ZONE_LABELS := ["A 区", "B 区", "C 区", "D 区"]
+const STAND_SPACING := Vector2(2.1, 3.2)
+const PEDESTAL_HEIGHT := 0.77
 const WALK_SPEED := 0.95
-const WALK_MIN := Vector2(-6.5, -4.0)
-const WALK_MAX := Vector2(6.5, 4.5)
+const WALK_MIN := Vector2(-15.0, -8.0)
+const WALK_MAX := Vector2(15.0, 8.0)
 const WALK_CELL := 0.25
+
+# One shared perspective camera frames the current zone, then slides onto the
+# stand the player selected. The wheel changes overview distance only.
+const OVERVIEW_DIRECTION := Vector3(0, 0.7363, 0.6769)
+const OVERVIEW_BASE_DISTANCE := 15.0
+const OVERVIEW_HALF_WIDTH := 6.7
+const OVERVIEW_HALF_HEIGHT := 3.4
+const ZOOM_MIN := 0.55
+const ZOOM_MAX := 2.4
+const ZOOM_STEP := 1.12
+const FOCUS_DISTANCE := 5.4
+const FOCUS_HEIGHT := 0.8
+const CAMERA_TRAVEL_SECONDS := 0.2
 
 var displayed_keys: Array[String] = []
 var visitors: Array[Node3D] = []
 var camera: Camera3D
+var selected_stand := -1
+var LOCATIONS: Array = []
+var zoom := 1.0
+var current_zone := 0
 var bubble_text := ""
 var bubble_slot := -1
 var bubble_visitor := -1
@@ -31,6 +52,8 @@ var bubble_visible: bool:
 var _tops: Array[MeshInstance3D] = []
 var _bases: Array[MeshInstance3D] = []
 var _signs: Array[Label3D] = []
+var _zone_signs: Array[Label3D] = []
+var _meshes: Dictionary = {}
 var _models: Dictionary = {}
 var _materials: Dictionary = {}
 var _capacity := 3
@@ -49,14 +72,39 @@ var _comment_clock := 0.0
 var _next_comment_at := 2.0
 var _comment_count := 0
 var _speaker_cursor := 0
+var _selection: Node3D
+var _camera_position := Vector3.ZERO
+var _camera_target := Vector3.ZERO
+var _camera_from_position := Vector3.ZERO
+var _camera_from_target := Vector3.ZERO
+var _camera_to_position := Vector3.ZERO
+var _camera_to_target := Vector3.ZERO
+var _camera_travel := 1.0
+var _camera_focus_slot := -1
+var _preview_key := ""
+var _preview_model: Crystal
+var _preview_hidden_slot := -1
+var _item_defs: Dictionary = {}
 
 func _ready() -> void:
+	LOCATIONS = _build_locations()
 	_build_room()
+	_build_selection()
 	_build_navigation()
 	_build_bubble()
 	set_viewport_size(_viewport_size)
 	set_collection(_pending_collection)
 	set_process(_active)
+
+func _build_locations() -> Array:
+	var result: Array = []
+	for zone in range(ZONE_CENTERS.size()):
+		var center: Vector3 = ZONE_CENTERS[zone]
+		for row in range(ZONE_ROWS):
+			for col in range(ZONE_COLS):
+				result.append(center + Vector3((float(col) - 2.5) * STAND_SPACING.x, 0.0,
+					(float(row) - 0.5) * STAND_SPACING.y))
+	return result
 
 func _material(color: Color, unshaded: bool = false) -> StandardMaterial3D:
 	var key := color.to_html() + str(unshaded)
@@ -74,63 +122,84 @@ func _box(node_name: String, at: Vector3, dimensions: Vector3, color: Color,
 		unshaded: bool = false) -> MeshInstance3D:
 	var instance := MeshInstance3D.new()
 	instance.name = node_name
-	var mesh := BoxMesh.new()
-	mesh.size = dimensions
-	instance.mesh = mesh
+	instance.mesh = _mesh_for(dimensions)
 	instance.material_override = _material(color, unshaded)
 	instance.position = at
 	add_child(instance)
 	return instance
+
+func _mesh_for(dimensions: Vector3) -> BoxMesh:
+	# Identical pedestal parts share one BoxMesh; only the instance and material
+	# differ, which keeps 48 stands cheap to build.
+	var key := var_to_str(dimensions)
+	if _meshes.has(key):
+		return _meshes[key]
+	var mesh := BoxMesh.new()
+	mesh.size = dimensions
+	_meshes[key] = mesh
+	return mesh
 
 func _build_room() -> void:
 	var environment := WorldEnvironment.new()
 	environment.name = "LobbyEnvironment"
 	environment.environment = Environment.new()
 	environment.environment.background_mode = Environment.BG_COLOR
-	environment.environment.background_color = Color("#59667f")
+	environment.environment.background_color = Palette.SLATE
 	environment.environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	environment.environment.ambient_light_color = Color("#e5e7ed")
+	environment.environment.ambient_light_color = Palette.BONE
 	environment.environment.ambient_light_energy = 0.32
 	add_child(environment)
 	var sun := DirectionalLight3D.new()
 	sun.name = "LobbyLight"
 	sun.rotation_degrees = Vector3(-62, -26, 0)
-	sun.light_color = Color("#fffaf2")
+	sun.light_color = Palette.CREAM
 	sun.light_energy = 0.48
 	sun.shadow_enabled = true
 	sun.directional_shadow_max_distance = 32.0
 	add_child(sun)
-	_box("PlainFloor", Vector3(0, -0.08, 0), Vector3(60, 0.16, 60), Color("#58667f"))
-	for index in range(ZONES.size()):
-		var at: Vector3 = ZONES[index]
+	_box("PlainFloor", Vector3(0, -0.08, 0), Vector3(60, 0.16, 60), Palette.SLATE)
+	for index in range(ZONE_CENTERS.size()):
+		var at: Vector3 = ZONE_CENTERS[index]
 		_box("ExhibitionZone_%d" % index, at + Vector3(0, 0.009, 0),
-			Vector3(4.6, 0.018, 2.75), Color("#8a7f7d"))
+			Vector3(12.6, 0.018, 5.4), Palette.MOON_BLUE)
 		for side in [-1.0, 1.0]:
-			_box("ZoneEdgeX_%d" % index, at + Vector3(0, 0.022, side * 1.375),
-				Vector3(4.6, 0.014, 0.035), Color("#e9a35c"), true)
-			_box("ZoneEdgeZ_%d" % index, at + Vector3(side * 2.3, 0.022, 0),
-				Vector3(0.035, 0.014, 2.75), Color("#e9a35c"), true)
+			_box("ZoneEdgeX_%d" % index, at + Vector3(0, 0.022, side * 2.7),
+				Vector3(12.6, 0.014, 0.05), Palette.AMBER, true)
+			_box("ZoneEdgeZ_%d" % index, at + Vector3(side * 6.3, 0.022, 0),
+				Vector3(0.05, 0.014, 5.4), Palette.AMBER, true)
+		var zone_sign := Label3D.new()
+		zone_sign.name = "LobbyZoneLabel_%d" % index
+		zone_sign.text = str(ZONE_LABELS[index])
+		zone_sign.position = at + Vector3(0, 0.06, 2.75)
+		zone_sign.font_size = 32
+		zone_sign.pixel_size = 0.012
+		zone_sign.outline_size = 4
+		zone_sign.outline_modulate = Palette.DEEP_SLATE
+		zone_sign.modulate = Palette.AMBER_LIGHT
+		zone_sign.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		add_child(zone_sign)
+		_zone_signs.append(zone_sign)
 	for index in range(LOCATIONS.size()):
 		var at: Vector3 = LOCATIONS[index]
-		_bases.append(_box("LobbyPedestal_%d" % index, at + Vector3(0, 0.32, 0),
-			Vector3(1.23, 0.62, 1.1), Color("#424b60")))
-		_tops.append(_box("LobbyPedestalTop_%d" % index, at + Vector3(0, 0.645, 0),
-			Vector3(1.3, 0.07, 1.18), Color("#e4d5b9")))
-		_box("LobbyPedestalPlate_%d" % index, at + Vector3(0, 0.39, 0.561),
-			Vector3(0.38, 0.14, 0.025), Color("#d2a55c"))
+		_bases.append(_box("LobbyPedestal_%d" % index, at + Vector3(0, 0.35, 0),
+			Vector3(1.55, 0.70, 1.4), Palette.SLATE))
+		_tops.append(_box("LobbyPedestalTop_%d" % index, at + Vector3(0, 0.73, 0),
+			Vector3(1.66, 0.08, 1.5), Palette.BONE))
+		_box("LobbyPedestalPlate_%d" % index, at + Vector3(0, 0.42, 0.72),
+			Vector3(0.46, 0.16, 0.03), Palette.RUST)
 		var sign := Label3D.new()
 		sign.name = "LobbySlotLabel_%d" % index
-		sign.position = at + Vector3(0, 0.24, 1.02)
+		sign.position = at + Vector3(0, 0.30, 0.95)
 		sign.font_size = 32
 		sign.pixel_size = 0.008
 		sign.outline_size = 3
-		sign.outline_modulate = Color("#343b4b")
-		sign.modulate = Color("#e4e0d8")
+		sign.outline_modulate = Palette.DEEP_SLATE
+		sign.modulate = Palette.BONE
 		sign.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		sign.no_depth_test = true
 		add_child(sign)
 		_signs.append(sign)
-	var entrances := [Vector3(-3.7, 0.02, 0.05), Vector3(3.1, 0.02, 0.05), Vector3(-2.4, 0.02, 3.65)]
+	var entrances := [Vector3(-2.4, 0.02, 7.0), Vector3(0.0, 0.02, 7.0), Vector3(2.4, 0.02, 7.0)]
 	for index in range(entrances.size()):
 		var visitor := Visitor.new()
 		visitor.name = "MuseumVisitor_%d" % index
@@ -142,40 +211,190 @@ func _build_room() -> void:
 			"path_index": 0, "dwell": 0.0, "phase": "walk", "visits": index})
 	camera = Camera3D.new()
 	camera.name = "LobbyCamera"
-	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.projection = Camera3D.PROJECTION_PERSPECTIVE
 	camera.keep_aspect = Camera3D.KEEP_HEIGHT
 	camera.near = 0.1
-	camera.far = 60.0
+	camera.far = 90.0
 	add_child(camera)
 	camera.current = true
-	camera.position = Vector3(0, 12.5, 11.5)
-	camera.look_at(Vector3(0, 0.1, 0.1))
+	var pose := _overview_pose()
+	_camera_position = pose[0]
+	_camera_target = pose[1]
+	_apply_camera()
+
+func _build_selection() -> void:
+	# One lightweight outline belongs to the shared hall. Opening a drawer or
+	# selecting another exhibit never creates another world, camera or crowd.
+	_selection = Node3D.new()
+	_selection.name = "SelectedExhibitionStand"
+	add_child(_selection)
+	for side: float in [-1.0, 1.0]:
+		var edge_x := _box("SelectedStandEdgeX", Vector3(0, 0.045, side * 0.85),
+			Vector3(1.86, 0.025, 0.05), Palette.AMBER_LIGHT, true)
+		edge_x.reparent(_selection)
+		var edge_z := _box("SelectedStandEdgeZ", Vector3(side * 0.93, 0.045, 0),
+			Vector3(0.05, 0.025, 1.7), Palette.AMBER_LIGHT, true)
+		edge_z.reparent(_selection)
+	set_selected_stand(selected_stand)
+
+func set_selected_stand(slot: int) -> void:
+	# A locked/out-of-range slot means no active placement destination. Do not
+	# silently highlight a different unlocked stand than the one requested.
+	selected_stand = slot if slot >= 0 and slot < _capacity and slot < LOCATIONS.size() else -1
+	if selected_stand < 0:
+		zoom = 1.0
+	if selected_stand >= 0:
+		current_zone = clampi(selected_stand / ZONE_SIZE, 0, ZONE_CENTERS.size() - 1)
+	_refresh_preview()
+	if not is_instance_valid(_selection):
+		return
+	_selection.visible = selected_stand >= 0
+	if selected_stand >= 0:
+		_selection.position = LOCATIONS[selected_stand]
+	if selected_stand != _camera_focus_slot:
+		_start_camera_travel(selected_stand)
+
+func set_preview_item(key: String) -> void:
+	if key == _preview_key:
+		return
+	_preview_key = key
+	_refresh_preview()
+
+func _refresh_preview() -> void:
+	if is_instance_valid(_preview_model):
+		remove_child(_preview_model)
+		_preview_model.queue_free()
+	_preview_model = null
+	if _preview_hidden_slot >= 0 and _models.has(_preview_hidden_slot):
+		var shown: Crystal = _models[_preview_hidden_slot]
+		if is_instance_valid(shown):
+			shown.visible = true
+	_preview_hidden_slot = -1
+	if selected_stand < 0 or _preview_key.is_empty():
+		return
+	var slots: Array = _pending_collection.get("slots", [])
+	var occupied := str(slots[selected_stand]) if selected_stand < slots.size() else ""
+	if occupied == _preview_key:
+		return
+	var data: Dictionary = _item_defs.get(_preview_key, {})
+	if data.is_empty():
+		return
+	if _models.has(selected_stand):
+		var hidden: Crystal = _models[selected_stand]
+		if is_instance_valid(hidden):
+			hidden.visible = false
+			_preview_hidden_slot = selected_stand
+	_preview_model = _make_specimen(data, selected_stand, "PreviewSpecimen")
 
 func set_viewport_size(dimensions: Vector2) -> void:
 	_viewport_size = Vector2(maxf(1.0, dimensions.x), maxf(1.0, dimensions.y))
 	if is_instance_valid(camera):
-		# KEEP_HEIGHT uses vertical extent: reserve a comfortable margin at either
-		# aspect ratio instead of allowing the outer collection bays to be cropped.
-		camera.size = maxf(6.6, 12.9 / (_viewport_size.x / _viewport_size.y))
-		for sign: Label3D in _signs:
-			# Keep captions near 18 screen pixels at either phone or desktop size.
-			# A raised anchor and disabled depth test prevent the floor clipping
-			# the lower half of billboard glyphs at this elevated camera angle.
-			sign.pixel_size = 18.0 * camera.size / (_viewport_size.y * sign.font_size)
+		# The fov covers one zone at the base distance; the wheel then moves the
+		# camera along the view direction instead of changing the projection.
+		var aspect := _viewport_size.x / _viewport_size.y
+		camera.fov = rad_to_deg(2.0 * atan(maxf(OVERVIEW_HALF_HEIGHT,
+			OVERVIEW_HALF_WIDTH / aspect) / OVERVIEW_BASE_DISTANCE))
+		var pose := _focus_pose(_camera_focus_slot) if _camera_focus_slot >= 0 else _overview_pose()
+		_camera_position = pose[0]
+		_camera_target = pose[1]
+		_camera_to_position = _camera_position
+		_camera_to_target = _camera_target
+		_camera_travel = 1.0
+		_apply_camera()
 	_update_bubble_position()
+
+func _overview_pose() -> Array:
+	var target: Vector3 = ZONE_CENTERS[clampi(current_zone, 0, ZONE_CENTERS.size() - 1)] + Vector3(0, 0.1, 0)
+	return [target + OVERVIEW_DIRECTION * (OVERVIEW_BASE_DISTANCE * zoom), target]
+
+func set_zone(zone: int) -> void:
+	var next := clampi(zone, 0, ZONE_CENTERS.size() - 1)
+	if next == current_zone:
+		return
+	current_zone = next
+	if selected_stand < 0:
+		_start_camera_travel(-1)
+
+func adjust_zoom(notches: float) -> void:
+	if selected_stand >= 0 or not is_instance_valid(camera):
+		return
+	zoom = clampf(zoom * pow(ZOOM_STEP, notches), ZOOM_MIN, ZOOM_MAX)
+	_start_camera_travel(-1)
+
+func reset_view() -> void:
+	zoom = 1.0
+	set_preview_item("")
+	set_selected_stand(-1)
+
+func _apply_camera() -> void:
+	if not is_instance_valid(camera):
+		return
+	camera.position = _camera_position
+	camera.look_at(_camera_target)
+	_update_sign_scales()
+
+func _start_camera_travel(slot: int) -> void:
+	_camera_focus_slot = slot
+	_camera_from_position = _camera_position
+	_camera_from_target = _camera_target
+	if slot < 0:
+		var pose := _overview_pose()
+		_camera_to_position = pose[0]
+		_camera_to_target = pose[1]
+	else:
+		var pose := _focus_pose(slot)
+		_camera_to_position = pose[0]
+		_camera_to_target = pose[1]
+	_camera_travel = 0.0
+	if not _active:
+		_finish_camera_travel()
+
+func _finish_camera_travel() -> void:
+	_camera_travel = 1.0
+	_camera_position = _camera_to_position
+	_camera_target = _camera_to_target
+	_apply_camera()
+
+func _focus_pose(slot: int) -> Array:
+	# Two side panels leave a symmetric gap, so the stand sits dead centre.
+	var target: Vector3 = LOCATIONS[slot] + Vector3(0, FOCUS_HEIGHT, 0)
+	return [target + OVERVIEW_DIRECTION * FOCUS_DISTANCE, target]
+
+func _advance_camera(delta: float) -> void:
+	if _camera_travel >= 1.0:
+		return
+	_camera_travel = minf(1.0, _camera_travel + maxf(0.0, delta) / CAMERA_TRAVEL_SECONDS)
+	var eased := smoothstep(0.0, 1.0, _camera_travel)
+	_camera_position = _camera_from_position.lerp(_camera_to_position, eased)
+	_camera_target = _camera_from_target.lerp(_camera_to_target, eased)
+	_apply_camera()
+
+func _update_sign_scales() -> void:
+	if not is_instance_valid(camera) or _viewport_size.y <= 1.0:
+		return
+	var half_height := tan(deg_to_rad(camera.fov) * 0.5)
+	for sign: Label3D in _signs:
+		# Keep captions near 18 screen pixels whatever the camera distance, so
+		# distant bays stay readable and a focused stand does not balloon.
+		var distance := camera.global_position.distance_to(sign.global_position)
+		sign.pixel_size = 18.0 * (2.0 * distance * half_height) / (_viewport_size.y * sign.font_size)
 
 func set_collection(summary: Dictionary) -> void:
 	_pending_collection = summary.duplicate(true)
 	if _tops.size() != LOCATIONS.size():
 		return
-	_capacity = clampi(int(summary.get("capacity", 3)), 0, LOCATIONS.size())
+	_capacity = clampi(int(summary.get("capacity", 6)), 0, LOCATIONS.size())
+	set_selected_stand(selected_stand)
 	var slots: Array = summary.get("slots", [])
 	var exhibits: Dictionary = summary.get("exhibits", {})
+	_item_defs.clear()
+	for row: Dictionary in summary.get("catalogue_rows", []):
+		_item_defs[str(row.key)] = row
 	var fingerprint := var_to_str({"slots": slots, "exhibits": exhibits, "capacity": _capacity})
 	if fingerprint == _fingerprint:
 		return
 	_fingerprint = fingerprint
-	# A changed item, placement, wear or level invalidates any old evaluation.
+	# A changed item, placement or level invalidates any old evaluation.
 	_clear_bubble()
 	_comment_clock = 0.0
 	_next_comment_at = 2.0
@@ -187,10 +406,10 @@ func set_collection(summary: Dictionary) -> void:
 	displayed_keys.clear()
 	for index in range(LOCATIONS.size()):
 		var unlocked := index < _capacity
-		_tops[index].material_override = _material(Color("#e4d5b9") if unlocked else Color("#a3a3a8"))
-		_bases[index].material_override = _material(Color("#424b60") if unlocked else Color("#596174"))
-		_signs[index].text = "%02d" % (index + 1) if unlocked else "待扩建"
-		_signs[index].modulate = Color("#ece2d2") if unlocked else Color("#b0b6c0")
+		_tops[index].material_override = _material(Palette.BONE if unlocked else Palette.DUST)
+		_bases[index].material_override = _material(Palette.SLATE if unlocked else Palette.DEEP_SLATE)
+		_signs[index].text = "空展台" if unlocked else "未开放"
+		_signs[index].modulate = Palette.BONE if unlocked else Palette.PALE_STONE
 		var key := str(slots[index]) if index < slots.size() else ""
 		if not unlocked or key.is_empty() or not exhibits.has(key):
 			continue
@@ -202,14 +421,15 @@ func set_collection(summary: Dictionary) -> void:
 		_entries[index] = entry.duplicate(true)
 		displayed_keys.append(key)
 		_signs[index].text = str(entry.get("label", "藏品"))
+	_refresh_preview()
 	for index in range(visitors.size()):
 		_choose_next_visit(index, true)
 
-func _make_specimen(data: Dictionary, slot: int) -> Crystal:
+func _make_specimen(data: Dictionary, slot: int, suffix: String = "") -> Crystal:
 	if data.is_empty():
 		return null
 	var model := Crystal.new()
-	model.name = "LobbySpecimen_%d" % slot
+	model.name = "LobbySpecimen_%d%s" % [slot, suffix]
 	add_child(model)
 	var kind := str(data.get("item_type", "crystal"))
 	if kind == "crystal":
@@ -227,9 +447,9 @@ func _make_specimen(data: Dictionary, slot: int) -> Crystal:
 			remove_child(model)
 			model.queue_free()
 			return null
-	model.set_wear(float(data.get("wear", 0)) / 100.0)
+		model.set_wear(0.0)
 	var bounds: AABB = model.get_local_bounds()
-	var fit := minf(1.0, minf(1.13 / maxf(bounds.size.x, bounds.size.z), 1.25 / maxf(0.01, bounds.size.y)))
+	var fit := minf(1.0, minf(1.45 / maxf(bounds.size.x, bounds.size.z), 1.35 / maxf(0.01, bounds.size.y)))
 	model.scale = Vector3.ONE * fit
 	model.position = LOCATIONS[slot] + Vector3(-bounds.get_center().x * fit,
 		PEDESTAL_HEIGHT - bounds.position.y * fit, -bounds.get_center().z * fit)
@@ -251,7 +471,7 @@ func handle_pointer(screen_pos: Vector2) -> void:
 	var nearest := INF
 	var slot := -1
 	for index in range(LOCATIONS.size()):
-		var bounds := AABB(LOCATIONS[index] + Vector3(-0.65, 0, -0.59), Vector3(1.3, PEDESTAL_HEIGHT, 1.18))
+		var bounds := AABB(LOCATIONS[index] + Vector3(-0.83, 0, -0.75), Vector3(1.66, PEDESTAL_HEIGHT, 1.5))
 		if _models.has(index):
 			var model: Crystal = _models[index]
 			bounds = bounds.merge(model.transform * model.get_local_bounds())
@@ -266,7 +486,10 @@ func handle_pointer(screen_pos: Vector2) -> void:
 	# The room is directly operated through its exhibits; floor clicks are inert.
 
 func _build_navigation() -> void:
-	_navigation.region = Rect2i(0, 0, 53, 35)
+	var cells := Vector2i(
+		roundi((WALK_MAX.x - WALK_MIN.x) / WALK_CELL),
+		roundi((WALK_MAX.y - WALK_MIN.y) / WALK_CELL))
+	_navigation.region = Rect2i(Vector2i.ZERO, cells)
 	_navigation.cell_size = Vector2.ONE * WALK_CELL
 	_navigation.offset = WALK_MIN
 	_navigation.diagonal_mode = AStarGrid2D.DIAGONAL_MODE_ONLY_IF_NO_OBSTACLES
@@ -280,7 +503,7 @@ func _walkable(at: Vector3) -> bool:
 	if at.x < WALK_MIN.x or at.x > WALK_MAX.x or at.z < WALK_MIN.y or at.z > WALK_MAX.y:
 		return false
 	for location: Vector3 in LOCATIONS:
-		if absf(at.x - location.x) < 0.9 and absf(at.z - location.z) < 0.82:
+		if absf(at.x - location.x) < 0.92 and absf(at.z - location.z) < 0.85:
 			return false
 	return true
 
@@ -301,6 +524,7 @@ func _grid_id(point: Vector2) -> Vector2i:
 func _process(delta: float) -> void:
 	if not _active:
 		return
+	_advance_camera(delta)
 	_comment_clock += maxf(0.0, delta)
 	if _bubble_remaining > 0.0:
 		_bubble_remaining = maxf(0.0, _bubble_remaining - delta)
@@ -321,14 +545,14 @@ func _choose_next_visit(index: int, first: bool = false) -> void:
 	var visit_index := index * 2 if first else int(state.visits) + 1
 	state.visits = visit_index
 	if displayed.is_empty():
-		var waiting := [Vector3(-3.6, 0, 0.35), Vector3(3.6, 0, 0.35), Vector3(0, 0, 3.8)]
+		var waiting := [Vector3(-2.5, 0, 0.2), Vector3(2.5, 0, 0.2), Vector3(0, 0, 0.2)]
 		destination = waiting[posmod(visit_index, waiting.size())]
 	else:
 		slot = int(displayed[posmod(visit_index, displayed.size())])
 		# Visitors inspect the actual model from a free spot just in front of it.
 		# Different standing spots keep a single-exhibit crowd from collapsing
 		# into one mesh while retaining a clear aisle in front of every stand.
-		destination = LOCATIONS[slot] + Vector3((index - 1) * 0.55, 0, 1.1 + (index % 2) * 0.12)
+		destination = LOCATIONS[slot] + Vector3((index - 1) * 0.45, 0, 1.15 + (index % 2) * 0.08)
 	state.target_slot = slot
 	state.phase = "walk"
 	state.dwell = 0.0
@@ -391,10 +615,11 @@ func _build_bubble() -> void:
 	_bubble.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_bubble.custom_minimum_size = Vector2(210, 68)
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color("#fff2dc")
-	style.border_color = Color("#b59b77")
+	style.bg_color = Palette.CREAM
+	style.border_color = Palette.RUST
 	style.set_border_width_all(1)
-	style.set_corner_radius_all(10)
+	style.set_corner_radius_all(2)
+	style.corner_detail = 2
 	style.content_margin_left = 12
 	style.content_margin_right = 12
 	style.content_margin_top = 10
@@ -405,7 +630,7 @@ func _build_bubble() -> void:
 	_bubble_label.name = "VisitorCommentText"
 	_bubble_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_bubble_label.add_theme_font_size_override("font_size", 18)
-	_bubble_label.add_theme_color_override("font_color", Color("#393b47"))
+	_bubble_label.add_theme_color_override("font_color", Palette.DEEP_SLATE)
 	_bubble_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_bubble_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	# Every reaction already contains at most two short, deliberate lines.

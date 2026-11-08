@@ -1,0 +1,28 @@
+extends RefCounted
+
+# Locked 24-colour palette. Source: docs/art/ART_BIBLE.md §3 and docs/art/palette-v1.gpl.
+# Scripts and shader uniforms must reference these names, never raw hex.
+const INK := Color("#101c2a")
+const DEEP_SLATE := Color("#293346")
+const SLATE := Color("#46516b")
+const MOON_BLUE := Color("#63738f")
+const DUST := Color("#8a92a2")
+const PALE_STONE := Color("#b9c2ce")
+const BONE := Color("#e2dece")
+const CREAM := Color("#fff2dc")
+const RUST_SHADOW := Color("#6a3d2b")
+const RUST := Color("#ad6134")
+const AMBER := Color("#eea452")
+const AMBER_LIGHT := Color("#ffd29b")
+const TEAL_SHADOW := Color("#194b59")
+const TEAL := Color("#2d8290")
+const CYAN := Color("#62c9c7")
+const CYAN_LIGHT := Color("#b6f1e0")
+const VIOLET_SHADOW := Color("#44345f")
+const VIOLET := Color("#7851a9")
+const CRYSTAL := Color("#b875ed")
+const CRYSTAL_LIGHT := Color("#e4b9ff")
+const ROSE_SHADOW := Color("#633c47")
+const WARNING_ROSE := Color("#b76062")
+const SKIN_SHADOW := Color("#d79a86")
+const SKIN := Color("#f2c6a5")

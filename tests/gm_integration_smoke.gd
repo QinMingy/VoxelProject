@@ -108,7 +108,7 @@ func run() -> void:
 	check(game.brush == 2, "UI brush buttons change actual mining brush")
 	var old_time: float = game.mining_time
 	await click(control("speed_up"))
-	check(game.mining_time < old_time and game.upgrades == 0, "GM speed changes without charging or pretending to buy upgrades")
+	check(game.mining_time < old_time and int(game.progression.levels.get("drill", 0)) == 0, "GM speed changes without charging or pretending to buy upgrades")
 	await click(control("reset_speed"))
 	check(is_equal_approx(game.mining_time, 0.9), "reset restores earned tool speed")
 	await click(control("ShowPerformance"))

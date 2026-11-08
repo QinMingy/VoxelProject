@@ -1,4 +1,5 @@
 extends Node3D
+const Palette = preload("res://palette.gd")
 
 const REST_POSITION := Vector3(0.30, -0.25, -0.52)
 const REST_ROTATION := Vector3(-0.21, 0.14, -0.07)
@@ -20,13 +21,13 @@ func _ready() -> void:
 	_pivot.rotation = REST_ROTATION
 	add_child(_pivot)
 
-	var shell := _material(Color("#e7e9d9"), 0.65)
-	var rubber := _material(Color("#253841"), 0.88)
-	var orange := _material(Color("#ee9e56"), 0.47)
-	var steel := _material(Color("#7d919a"), 0.36, 0.34)
-	_indicator = _material(Color("#76e5df"), 0.44)
+	var shell := _material(Palette.BONE, 0.65)
+	var rubber := _material(Palette.DEEP_SLATE, 0.88)
+	var orange := _material(Palette.AMBER, 0.47)
+	var steel := _material(Palette.DUST, 0.36, 0.34)
+	_indicator = _material(Palette.CYAN, 0.44)
 	_indicator.emission_enabled = true
-	_indicator.emission = Color("#76e5df")
+	_indicator.emission = Palette.CYAN
 	_indicator.emission_energy_multiplier = 0.75 if _drilling else 0.25
 
 	_box(Vector3(0.158, 0.128, 0.174), Vector3.ZERO, orange)

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "style_id": "moon-voxel-sprite-v1",
-  "updated": "2026-11-07",
+  "updated": "2026-11-08",
   "status": "locked_art_direction_runtime_migration_pending",
   "description": "原创2D像素精灵与3D体素布景；保留玩法、镜头、碰撞和目标平台",
   "scope": [
@@ -73,6 +73,8 @@
         80
       ],
       "visible_height_px": 60,
+      "head_height_px": 25,
+      "head_height_ratio": 0.42,
       "foot_pivot_px": [
         32,
         72
@@ -183,32 +185,42 @@
   },
   "cameras": {
     "lobby": {
-      "projection": "orthographic",
+      "projection": "perspective",
       "depression_deg": 47.41,
       "position": [
         0,
-        12.5,
-        11.5
+        8.64,
+        7.95
       ],
       "target": [
         0,
         0.1,
         0.1
       ],
-      "vertical_size_formula": "max(6.6,12.9/aspect)"
+      "distance_m": 11.6,
+      "vertical_fov_formula": "2*atan(max(3.3,6.45/aspect)/11.6)",
+      "projection_status": "user-confirmed perspective on 2026-11-08; overview framing matches the former orthographic coverage at the target plane",
+      "focus_on_placement": {
+        "trigger": "successful exhibit placement",
+        "distance_m": 5.2,
+        "target_height_m": 0.75,
+        "screen_bias_right": 0.24,
+        "travel_seconds": 0.2,
+        "returns_to_overview": [
+          "stand selection change",
+          "drawer close"
+        ]
+      },
+      "shared_by_modes": [
+        "lobby",
+        "warehouse_ui",
+        "stand_editing_ui"
+      ]
     },
     "warehouse": {
-      "projection": "orthographic",
-      "depression_deg": 47.39,
-      "yaw_range_rad": [
-        -0.55,
-        0.75
-      ],
-      "zoom_parameter_range": [
-        -1,
-        2
-      ],
-      "retain_existing_fit": true
+      "same_camera_as": "lobby",
+      "separate_3d_scene": false,
+      "status": "UI mode on persistent exhibition scene"
     },
     "third_person": {
       "fov_deg": 62,
@@ -360,6 +372,20 @@
       "16:9",
       "20:9"
     ]
+  },
+  "scene_contract": {
+    "exhibition_world_instances": 1,
+    "modes": [
+      "lobby",
+      "warehouse_ui",
+      "stand_editing_ui"
+    ],
+    "shared_state": [
+      "world",
+      "camera",
+      "visitors",
+      "visitor_progress"
+    ],
+    "runtime_status": "single shared exhibition viewport; warehouse and stand editing are UI overlays"
   }
 }
-

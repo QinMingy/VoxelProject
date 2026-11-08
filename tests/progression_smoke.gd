@@ -16,10 +16,8 @@ func _run() -> void:
 	if not DirAccess.dir_exists_absolute(scratch) and DirAccess.make_dir_recursive_absolute(scratch) == OK:
 		_check_round_trip(scratch.path_join("profile.cfg"))
 		_check_failed_save(scratch.path_join("unwritable.cfg"))
-		_check_v1_migration(scratch.path_join("v1.cfg"))
-		_check_v2_migration(scratch.path_join("v2.cfg"))
-		_check_v3_migration(scratch.path_join("v3.cfg"))
-		_check_v4_migration(scratch.path_join("v4.cfg"))
+		_check_retired_profiles(scratch)
+		_check_v6_migration(scratch.path_join("v6.cfg"))
 		_check_mining_radius(scratch.path_join("mining-radius.cfg"))
 		_check_range_growth(scratch.path_join("range.cfg"))
 		DirAccess.remove_absolute(scratch)
@@ -28,7 +26,7 @@ func _run() -> void:
 	for failure in _failures:
 		push_error(failure)
 	if _failures.is_empty():
-		print("PROGRESSION_OK defaults, exact upgrade costs, oxygen supply, zone fees, round-trip, failed writes, corrupt protection, v1-v4 migrations, mining radius, range area scaling 14/18/22/26")
+		print("PROGRESSION_OK defaults, exact upgrade costs, oxygen supply, zone fees, round-trip, failed writes, corrupt protection, v1-v5 profile retirement, mining radius, range area scaling 14/18/22/26")
 	quit(0 if _failures.is_empty() else 1)
 
 func _check_in_memory() -> void:
@@ -40,6 +38,9 @@ func _check_in_memory() -> void:
 	_expect(profile.upgrade_rows().size() == 10 and baseline.oxygen_supply_density == 0.25 and is_equal_approx(baseline.mining_radius, 0.45), "starting oxygen supply density, mining radius and ten upgrade rows")
 	_expect(baseline.activity_radius == 14.0 and is_equal_approx(baseline.map_area_multiplier, 196.0 / 676.0), "starting range and area multiplier")
 	_expect(not profile.buy_upgrade("missing").ok and not profile.buy_upgrade("oxygen").ok and profile.bank == 150, "unknown and unaffordable upgrades leave funds alone")
+	_expect(profile.touch_layout.is_empty(), "fresh profile has no custom touch layout")
+	var layout := {"jump": {"x": 0.8, "y": 0.8, "scale": 1.2}}
+	_expect(profile.set_touch_layout(layout).ok and profile.touch_layout == layout, "touch layout saves into the profile")
 	_expect(profile.buy_upgrade("detector").ok and profile.bank == 50 and profile.stats().detector_level == 1 and profile.stats().detector_range == 16, "detector purchase applies first tier")
 	profile.credit(4000)
 	for index in range(3):
@@ -79,6 +80,10 @@ func _check_round_trip(path: String) -> void:
 	var reloaded := Progression.new(path)
 	_expect(reloaded.load_profile() == OK and reloaded.bank == 237 and reloaded.selected_zone == "salvage", "save reopens with exact funds and zone")
 	_expect(reloaded.levels.boots == 1 and reloaded.stats().walk_speed == 3.7 and reloaded.last_report == report, "save reopens with upgrades and nested report")
+	var layout := {"joystick": {"x": 0.15, "y": 0.75, "scale": 1.1}}
+	_expect(reloaded.set_touch_layout(layout).ok, "touch layout persists through the real transaction")
+	var layout_reloaded := Progression.new(path)
+	_expect(layout_reloaded.load_profile() == OK and layout_reloaded.touch_layout == layout, "touch layout survives a process-style reload")
 
 	var invalid := ConfigFile.new()
 	_expect(invalid.load(path) == OK, "open isolated file before injecting corruption")
@@ -114,111 +119,39 @@ func _check_failed_save(path: String) -> void:
 	_expect(reloaded.load_profile() == OK and reloaded.bank == 162 and reloaded.last_report.total == 12, "retried save contains the reward and report")
 	DirAccess.remove_absolute(path)
 
-func _check_v1_migration(path: String) -> void:
-	var legacy := ConfigFile.new()
-	var old_levels := {"drill": 2, "oxygen": 1, "boots": 3, "backpack": 2, "detector": 1}
-	var old_report := {"text": "legacy receipt", "total": 34}
-	legacy.set_value("profile", "version", 1)
-	legacy.set_value("profile", "bank", 700)
-	legacy.set_value("profile", "levels", old_levels)
-	legacy.set_value("profile", "selected_zone", "deep")
-	legacy.set_value("profile", "last_report", old_report)
-	_expect(legacy.save(path) == OK, "write isolated v1 fixture")
-	var profile := Progression.new(path)
-	var original := FileAccess.get_file_as_string(path)
-	var expected_levels := old_levels.duplicate()
-	expected_levels["oxygen_supply"] = 0
-	expected_levels["excavation_range"] = 0
-	expected_levels["museum_capacity"] = 0
-	expected_levels["museum_appeal"] = 0
-	expected_levels["mining_radius"] = 0
-	_expect(profile.load_profile() == OK and profile.bank == 700 and profile.levels == expected_levels, "v1 preserves funds and old upgrades while adding baseline density and range")
-	_expect(profile.selected_zone == "deep" and profile.last_report == old_report, "v1 preserves selected zone and report")
-	_expect(FileAccess.get_file_as_string(path) == original, "reading v1 preserves the original file")
-	_expect(profile.buy_upgrade("oxygen_supply").ok and profile.bank == 520, "new upgrade purchases can save the migrated profile")
-	var saved := ConfigFile.new()
-	_expect(saved.load(path) == OK and saved.get_value("profile", "version", 0) == 5, "first mutation writes v5")
-	var reloaded := Progression.new(path)
-	expected_levels["oxygen_supply"] = 1
-	_expect(reloaded.load_profile() == OK and reloaded.bank == 520 and reloaded.levels == expected_levels, "v5 reload preserves the migrated and newly purchased levels")
+func _check_retired_profiles(directory: String) -> void:
+	# Every pre-experience profile is retired: keep a byte-exact backup, start a
+	# fresh run in memory, and never rewrite the old file just by loading it.
+	for version: int in [1, 3, 5]:
+		var path := directory.path_join("retired-v%d.cfg" % version)
+		var legacy := ConfigFile.new()
+		legacy.set_value("profile", "version", version)
+		legacy.set_value("profile", "bank", 6789)
+		legacy.set_value("profile", "levels", {"drill": 2, "oxygen": 1, "boots": 3, "backpack": 2, "detector": 1, "oxygen_supply": 1, "excavation_range": 1, "mining_radius": 1, "museum_capacity": 1, "museum_appeal": 1})
+		legacy.set_value("profile", "selected_zone", "deep")
+		legacy.set_value("profile", "last_report", {"text": "legacy"})
+		if version >= 4:
+			legacy.set_value("profile", "research_points", 6)
+			legacy.set_value("profile", "museum", {"warehouse": [], "exhibits": {}, "slots": ["", "", "", "", "", ""], "next_uid": 1, "identified_types": []})
+			legacy.set_value("profile", "trip_serial", 7)
+			legacy.set_value("profile", "active_trip", {})
+		_expect(legacy.save(path) == OK, "write retired v%d profile" % version)
+		var original := FileAccess.get_file_as_string(path)
+		var profile := Progression.new(path)
+		_expect(profile.load_profile() == OK, "v%d profile loads as a fresh run" % version)
+		_expect(profile.bank == Progression.DEFAULT_BANK and profile.research_points == 0 and profile.museum_state == Museum.initial_state(), "v%d discards the old collection and currencies" % version)
+		_expect(profile.levels.drill == 0 and profile.levels.museum_appeal == 0 and profile.selected_zone == Progression.DEFAULT_ZONE, "v%d discards old upgrades and selection" % version)
+		_expect(profile.active_trip.is_empty() and profile.last_report.is_empty() and profile.trip_serial == 0, "v%d discards the old settlement ledger" % version)
+		_expect(FileAccess.get_file_as_string(path) == original, "v%d load does not rewrite the retired file" % version)
+		var backup := "%s.v%d.bak" % [path, version]
+		_expect(FileAccess.file_exists(backup) and FileAccess.get_file_as_string(backup) == original, "v%d keeps a byte-exact backup beside the new save" % version)
+		profile.credit(500)
+		_expect(profile.buy_upgrade("boots").ok, "fresh run can save after retirement")
+		var saved := ConfigFile.new()
+		_expect(saved.load(path) == OK and saved.get_value("profile", "version", 0) == Progression.PROFILE_VERSION, "next save writes the current schema")
+		DirAccess.remove_absolute(backup)
+		DirAccess.remove_absolute(path)
 
-	var invalid_levels := old_levels.duplicate()
-	invalid_levels.erase("detector")
-	invalid_levels["unknown"] = 0
-	legacy.set_value("profile", "levels", invalid_levels)
-	_expect(legacy.save(path) == OK and Progression.new(path).load_profile() == ERR_FILE_CORRUPT, "v1 migration rejects replacing a required upgrade with an unknown key")
-	invalid_levels = old_levels.duplicate()
-	invalid_levels["drill"] = 4
-	legacy.set_value("profile", "levels", invalid_levels)
-	_expect(legacy.save(path) == OK and Progression.new(path).load_profile() == ERR_FILE_CORRUPT, "v1 migration rejects illegal old upgrade levels")
-	DirAccess.remove_absolute(path)
-
-func _check_v2_migration(path: String) -> void:
-	var legacy := ConfigFile.new()
-	var old_levels := {"drill": 2, "oxygen": 1, "oxygen_supply": 2, "boots": 3, "backpack": 2, "detector": 1}
-	var report := {"text": "density-era receipt", "income": 34, "net": -26}
-	legacy.set_value("profile", "version", 2)
-	legacy.set_value("profile", "bank", 977)
-	legacy.set_value("profile", "levels", old_levels)
-	legacy.set_value("profile", "selected_zone", "salvage")
-	legacy.set_value("profile", "last_report", report)
-	_expect(legacy.save(path) == OK, "write isolated v2 fixture")
-	var original := FileAccess.get_file_as_string(path)
-	var profile := Progression.new(path)
-	var expected := old_levels.duplicate()
-	expected["excavation_range"] = 0
-	expected["museum_capacity"] = 0
-	expected["museum_appeal"] = 0
-	expected["mining_radius"] = 0
-	_expect(profile.load_profile() == OK and profile.levels == expected and profile.bank == 977, "v2 preserves all six upgrades and cash while adding baseline range")
-	_expect(profile.selected_zone == "salvage" and profile.last_report == report and profile.stats().activity_radius == 14.0, "v2 preserves report and region and receives smaller starting range")
-	_expect(FileAccess.get_file_as_string(path) == original, "reading v2 does not rewrite the original file")
-	_expect(profile.buy_upgrade("excavation_range").ok and profile.bank == 837, "range purchase saves migrated v2 progress")
-	var saved := ConfigFile.new()
-	_expect(saved.load(path) == OK and saved.get_value("profile", "version", 0) == 5, "v2 mutation writes v5")
-	var reloaded := Progression.new(path)
-	expected.excavation_range = 1
-	_expect(reloaded.load_profile() == OK and reloaded.levels == expected and reloaded.bank == 837 and reloaded.stats().activity_radius == 18.0, "range purchase survives a process-style reload")
-
-	var invalid := old_levels.duplicate()
-	invalid.erase("oxygen_supply")
-	invalid["excavation_range"] = 0
-	legacy.set_value("profile", "levels", invalid)
-	_expect(legacy.save(path) == OK and Progression.new(path).load_profile() == ERR_FILE_CORRUPT, "v2 rejects a missing density key replaced with future range")
-	invalid = old_levels.duplicate()
-	invalid["excavation_range"] = 0
-	legacy.set_value("profile", "levels", invalid)
-	_expect(legacy.save(path) == OK and Progression.new(path).load_profile() == ERR_FILE_CORRUPT, "v2 rejects unexpected future keys rather than silently overwriting them")
-	DirAccess.remove_absolute(path)
-
-func _check_v3_migration(path: String) -> void:
-	var legacy := ConfigFile.new()
-	var old_levels := {"drill": 1, "oxygen": 2, "oxygen_supply": 1, "boots": 2, "backpack": 1, "detector": 3, "excavation_range": 2}
-	var report := {"text": "range-era receipt", "income": 124, "net": 64}
-	legacy.set_value("profile", "version", 3)
-	legacy.set_value("profile", "bank", 1940)
-	legacy.set_value("profile", "levels", old_levels)
-	legacy.set_value("profile", "selected_zone", "salvage")
-	legacy.set_value("profile", "last_report", report)
-	_expect(legacy.save(path) == OK, "write isolated v3 fixture")
-	var original := FileAccess.get_file_as_string(path)
-	var profile := Progression.new(path)
-	var expected := old_levels.duplicate()
-	expected.museum_capacity = 0
-	expected.museum_appeal = 0
-	expected.mining_radius = 0
-	_expect(profile.load_profile() == OK and profile.bank == 1940 and profile.levels == expected, "v3 adds museum levels without changing any existing upgrades")
-	_expect(profile.last_report == report and profile.selected_zone == "salvage" and profile.research_points == 0 and profile.museum_state.warehouse.is_empty() and profile.museum_state.exhibits.is_empty(), "legacy museum starts empty, with old report retained")
-	_expect(FileAccess.get_file_as_string(path) == original, "v3 migration does not write on read")
-	_expect(profile.buy_upgrade("museum_capacity").ok and profile.bank == 1340 and profile.stats().museum_capacity == 4, "migrated profile can buy museum space for 600 without affecting equipment")
-	var restored := Progression.new(path)
-	_expect(restored.load_profile() == OK and restored.bank == 1340 and restored.levels.museum_capacity == 1 and restored.levels.excavation_range == 2 and restored.levels.mining_radius == 0, "v5 persists migrated museum and existing range progress")
-	var wrong := old_levels.duplicate()
-	wrong.erase("boots")
-	wrong["museum_appeal"] = 0
-	legacy.set_value("profile", "levels", wrong)
-	_expect(legacy.save(path) == OK and Progression.new(path).load_profile() == ERR_FILE_CORRUPT, "v3 rejects a missing legacy upgrade replaced by a museum key")
-	DirAccess.remove_absolute(path)
 
 func _check_range_growth(path: String) -> void:
 	var profile := Progression.new(path)
@@ -244,78 +177,30 @@ func _check_range_growth(path: String) -> void:
 	_expect(reloaded.load_profile() == OK and reloaded.levels.excavation_range == 3 and reloaded.stats().activity_radius == 26.0 and reloaded.bank == 460, "maximum range and its balance persist")
 	DirAccess.remove_absolute(path)
 
-func _check_v4_migration(path: String) -> void:
-	# Build a real collection/warehouse with stable specimen UIDs, then encode it
-	# as a museum-era v4 profile. Legacy appeal purchases keep their earned level
-	# and unspent points even though the new catalogue has different prices.
-	var source := Progression.new("")
-	source.bank = 6789
-	source.levels.drill = 2
-	source.levels.oxygen_supply = 1
-	source.levels.museum_capacity = 2
-	source.levels.museum_appeal = 3
-	var records: Array = []
-	for definition: Dictionary in Museum.CATEGORIES:
-		for wear: int in [20, 10, 30]:
-			var item := definition.duplicate(true)
-			item["wear"] = wear
-			records.append(item)
-	var appended: Dictionary = Museum.append_cargo(source.museum_state, records)
-	_expect(appended.ok, "v4 fixture creates real canonical specimens")
-	source.museum_state = appended.state
-	for uid: int in appended.uids:
-		var donated: Dictionary = Museum.plan_donation(source.museum_state, uid, 6)
-		_expect(donated.ok, "v4 fixture researches each of the six categories")
-		source.museum_state = donated.state
-	var spare := Museum.definition("hammer")
-	spare["wear"] = 44
-	appended = Museum.append_cargo(source.museum_state, [spare])
-	_expect(appended.ok, "v4 fixture retains actual unsold warehouse cargo")
-	source.museum_state = appended.state
-	source.research_points = 6 # 18 earned minus the former 2 + 4 + 6 costs.
-	source.trip_serial = 7
-	source.selected_zone = "deep"
-	source.last_report = {"text": "museum-era receipt", "income": 348, "nested": {"cargo": [2, 4]}}
-	source.active_trip = {"trip_id": 7, "fee": 120, "zone": "深埋矿脉", "zone_id": "deep", "income_snapshot": 348}
-	var config := ConfigFile.new()
-	var old_levels: Dictionary = source.levels.duplicate()
-	old_levels.erase("mining_radius")
-	for key: String in ["bank", "research_points", "trip_serial", "selected_zone", "last_report", "active_trip"]:
-		config.set_value("profile", key, source.get(key))
-	config.set_value("profile", "version", 4)
-	config.set_value("profile", "levels", old_levels)
-	config.set_value("profile", "museum", source.museum_state)
-	_expect(config.save(path) == OK, "write museum-era v4 profile")
-	var original := FileAccess.get_file_as_string(path)
+func _check_v6_migration(path: String) -> void:
+	var legacy := ConfigFile.new()
+	legacy.set_value("profile", "version", 6)
+	legacy.set_value("profile", "bank", 4321)
+	legacy.set_value("profile", "levels", {"drill": 1, "mining_radius": 1, "oxygen": 2, "oxygen_supply": 1, "boots": 1, "backpack": 1, "detector": 2, "excavation_range": 1, "museum_capacity": 2, "museum_appeal": 1})
+	legacy.set_value("profile", "selected_zone", "deep")
+	legacy.set_value("profile", "research_points", 7)
+	legacy.set_value("profile", "museum", {"items": {"crystal_small": {"key": "crystal_small", "copies": 6}}, "slots": ["crystal_small", "", "", "", "", ""]})
+	legacy.set_value("profile", "trip_serial", 3)
+	legacy.set_value("profile", "active_trip", {})
+	legacy.set_value("profile", "last_report", {"text": "v6 receipt"})
+	_expect(legacy.save(path) == OK, "write v6 fixture")
 	var profile := Progression.new(path)
-	var expected_levels := old_levels.duplicate()
-	expected_levels["mining_radius"] = 0
-	_expect(profile.load_profile() == OK and profile.bank == 6789 and profile.levels == expected_levels, "v4 adds only baseline mining radius and preserves all nine earned upgrade levels")
-	_expect(profile.museum_state == source.museum_state and profile.research_points == 6, "v4 retains every warehouse UID, exhibit condition, display, identification and unspent research point")
-	_expect(profile.active_trip == source.active_trip and profile.trip_serial == 7 and profile.last_report == source.last_report and profile.selected_zone == "deep", "v4 preserves outstanding entry payment, original income snapshot and settlement ledger")
-	_expect(FileAccess.get_file_as_string(path) == original, "reading v4 preserves original bytes without automatic resave")
-	_expect(profile.buy_upgrade("mining_radius").ok and profile.bank == 6609 and profile.levels.mining_radius == 1, "v4 upgrade costs only the newly purchased 180 and retains prior research purchases")
-	var restored := Progression.new(path)
-	_expect(restored.load_profile() == OK and restored.bank == 6609 and restored.levels.mining_radius == 1 and restored.levels.museum_appeal == 3 and restored.research_points == 6, "v5 reload preserves grandfathered appeal and new radius")
-	_expect(restored.museum_state == source.museum_state and restored.active_trip == source.active_trip and restored.last_report == source.last_report, "v4-to-v5 mutation retains cargo and the outstanding trip exactly")
+	_expect(profile.load_profile() == OK, "v6 profile migrates instead of retiring")
+	_expect(profile.bank == 4321 and profile.research_points == 7 and profile.levels.museum_capacity == 2,
+		"v6 keeps cash, research points and capacity tier")
+	_expect(profile.museum_state.items.crystal_small.copies == 6 and profile.museum_state.slots.size() == 48
+		and profile.museum_state.slots[0] == "crystal_small", "v6 collection survives into the 48-slot layout")
+	_expect(FileAccess.file_exists("%s.v6.bak" % path), "v6 backup written before migration")
+	profile.credit(10)
 	var saved := ConfigFile.new()
-	_expect(saved.load(path) == OK and saved.get_value("profile", "version", 0) == 5, "v4 mutation writes schema five")
-
-	# Extended v4 data still requires validation; adding a radius must never
-	# silently reset a corrupt collection or discard an outstanding trip.
-	var bad_museum: Dictionary = source.museum_state.duplicate(true)
-	bad_museum.warehouse[0]["world_id"] = 99
-	config.set_value("profile", "museum", bad_museum)
-	_expect(config.save(path) == OK, "write malformed museum-era cargo fixture")
-	var broken := Progression.new(path)
-	var damaged_text := FileAccess.get_file_as_string(path)
-	_expect(broken.load_profile() == ERR_FILE_CORRUPT and broken.save_profile() != OK and FileAccess.get_file_as_string(path) == damaged_text, "v4 malformed cargo blocks migration writes and preserves bytes")
-	config.set_value("profile", "museum", source.museum_state)
-	var bad_trip: Dictionary = source.active_trip.duplicate()
-	bad_trip.erase("income_snapshot")
-	config.set_value("profile", "active_trip", bad_trip)
-	_expect(config.save(path) == OK, "write malformed museum-era trip fixture")
-	_expect(Progression.new(path).load_profile() == ERR_FILE_CORRUPT, "v4 rejects a malformed outstanding settlement ledger")
+	_expect(saved.load(path) == OK and saved.get_value("profile", "version", 0) == Progression.PROFILE_VERSION,
+		"next save writes the 48-stand schema")
+	DirAccess.remove_absolute("%s.v6.bak" % path)
 	DirAccess.remove_absolute(path)
 
 func _check_mining_radius(path: String) -> void:

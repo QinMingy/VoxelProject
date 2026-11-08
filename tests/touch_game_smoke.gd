@@ -27,6 +27,14 @@ func drag(id: int, at: Vector2, motion: Vector2) -> void:
 	event.screen_relative = motion
 	root.push_input(event, true)
 
+func shot(name: String) -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	await RenderingServer.frame_post_draw
+	var directory := "res://.build/touch-hud"
+	DirAccess.make_dir_recursive_absolute(directory)
+	check(root.get_texture().get_image().save_png(directory + "/" + name + ".png") == OK, "save " + name)
+
 func point(node_name: String) -> Vector2:
 	return game.touch_controls.find_child(node_name, true, false).get_global_rect().get_center()
 
@@ -97,6 +105,21 @@ func run() -> void:
 	check(paused and not game.touch_controls.find_child("TouchRoot", true, false).visible, "inventory hides gameplay touch controls")
 	game.inventory_panel.close()
 	await process_frame
+	await shot("touch-hud")
+	var gear := game.touch_controls.find_child("TouchLayoutGear", true, false) as Button
+	gear.pressed.emit()
+	await process_frame
+	check(paused and game.touch_controls.is_editing(), "layout gear pauses the world and enters editing")
+	await shot("touch-layout-edit")
+	var jump_at := point("TouchJump")
+	finger(5, jump_at, true)
+	drag(5, jump_at + Vector2(-40, 30), Vector2(-40, 30))
+	finger(5, jump_at + Vector2(-40, 30), false)
+	await process_frame
+	(game.touch_controls.find_child("TouchEditSave", true, false) as Button).pressed.emit()
+	await process_frame
+	check(not paused and not game.touch_controls.is_editing(), "saving the layout resumes gameplay")
+	check(not game.progression.touch_layout.is_empty(), "layout is written into the profile")
 	game.message = ""
 	game.update_hud()
 	for frame in range(45):

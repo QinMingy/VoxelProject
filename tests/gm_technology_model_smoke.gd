@@ -51,30 +51,26 @@ func run() -> void:
 			"unsettled expedition blocks " + action)
 	var cargo: Array[Dictionary] = []
 	for category: Dictionary in Progression.Museum.CATEGORIES:
-		var item := category.duplicate(true)
-		item["wear"] = 10
-		cargo.append(item)
-	check(profile.settle_expedition(int(trip.trip_id), cargo, false, 65.0).ok, "fixture cargo enters warehouse through settlement")
-	for item: Dictionary in profile.museum_state.warehouse.duplicate(true):
-		check(profile.donate_item(int(item.uid)).ok, "fixture registers actual collectible")
+		cargo.append(category.duplicate(true))
+	check(profile.settle_expedition(int(trip.trip_id), cargo, false, 65.0).ok, "fixture cargo enters the collection through settlement")
 	check(profile.apply_debug_change("max_levels").ok, "bulk maximum uses valid per-technology caps")
 	for id: String in Progression.UPGRADES:
 		check(profile.levels[id] == Progression.UPGRADES[id].costs.size(), "correct maximum for " + id)
-	var keys: Array = profile.museum_state.exhibits.keys()
-	for index in range(keys.size()):
-		check(profile.place_exhibit(keys[index], index).ok, "place all six preserved exhibits")
-	var before_exhibits: Dictionary = profile.museum_state.exhibits.duplicate(true)
+	var keys: Array = profile.museum_state.items.keys()
+	for index in range(mini(keys.size(), int(profile.stats().museum_capacity))):
+		check(profile.place_exhibit(keys[index], index).ok, "place preserved exhibits up to capacity")
+	var before_exhibits: Dictionary = profile.museum_state.items.duplicate(true)
 	var downgrade: Dictionary = profile.apply_debug_change("set_level", "museum_capacity", 0)
-	check(downgrade.ok and downgrade.returned_exhibits == 3, "capacity downgrade returns only the three overflow displays")
-	check(profile.museum_state.exhibits == before_exhibits and profile.museum_summary().displayed_count == 3,
+	check(downgrade.ok and downgrade.returned_exhibits == 2, "capacity downgrade returns only the overflow displays")
+	check(profile.museum_state.items == before_exhibits and profile.museum_summary().displayed_count == 6,
 		"downgrade preserves every registered item and keeps valid first slots")
-	for index in range(3, 6):
+	for index in range(6, 48):
 		check(profile.museum_state.slots[index] == "", "locked slots are cleared for valid reload")
 	var research_before_reset: int = profile.research_points
 	check(profile.apply_debug_change("reset_levels").ok, "bulk baseline succeeds")
 	for level: int in profile.levels.values():
 		check(level == 0, "all technology levels reset")
-	check(profile.bank == original_bank and profile.research_points == research_before_reset and profile.museum_state.exhibits == before_exhibits,
+	check(profile.bank == original_bank and profile.research_points == research_before_reset and profile.museum_state.items == before_exhibits,
 		"technology reset does not reset cash, research or collection")
 	var loaded := Progression.new(path)
 	check(loaded.load_profile() == OK and snapshot(loaded) == snapshot(profile), "debug-modified profile reloads with identical valid data")

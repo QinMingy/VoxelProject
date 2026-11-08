@@ -178,5 +178,22 @@ func run() -> void:
 	check(gm.is_open, "emulated mouse still clicks normal GM GUI")
 	gm.close()
 	controls.release_all()
-	print("TOUCH_CONTROLS_OK multitouch independent_release drag_mine look_only actions mouse_no_duplicates modal_pause_focus_hide GM_toggle GM_corner audio_toggle")
+	var jump_button: Button = controls._buttons["jump"]
+	var jump_style := jump_button.get_theme_stylebox("normal") as StyleBoxFlat
+	check(is_equal_approx(jump_button.size.x, jump_button.size.y) and jump_button.size.y >= 90.0 * controls._layout_scale,
+		"jump button is large and square before the circular clip")
+	check(jump_style.corner_radius_top_left >= int(jump_button.size.x * 0.5) - 1,
+		"jump button uses a full circular corner radius")
+	var before_hidden := actions.size()
+	controls.set_action_available("pickup", false)
+	await process_frame
+	check(not (controls.find_child("TouchPickup", true, false) as Button).visible, "unavailable pickup hides its button")
+	touch(11, pickup)
+	touch(11, pickup, false)
+	check(actions.size() == before_hidden, "hidden pickup cannot be triggered")
+	controls.set_action_available("pickup", true)
+	await process_frame
+	check((controls.find_child("TouchPickup", true, false) as Button).visible, "pickup returns when available")
+	check((controls.find_child("TouchLayoutGear", true, false) as Button).visible, "layout gear is visible while playing")
+	print("TOUCH_CONTROLS_OK multitouch independent_release drag_mine look_only actions mouse_no_duplicates modal_pause_focus_hide GM_toggle GM_corner audio_toggle conditional_actions jump_circle layout_gear")
 	quit(0)

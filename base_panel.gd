@@ -1,18 +1,17 @@
 extends CanvasLayer
+const TouchScroll = preload("res://touch_scroll.gd")
 
 const UI = preload("res://ui_style.gd")
+const Palette = preload("res://palette.gd")
 
 signal opened
 signal closed
-# Kept for callers still connecting it. Expedition selection never emits upgrades.
-signal upgrade_requested(id: String)
 signal zone_selected(id: String)
 signal deploy_requested
 
 var is_open := false
 var _state: Dictionary = {
-	"bank": 0, "upgrades": [], "zones": [], "selected_zone": "",
-	"stats": {}, "receipt": "", "message": "",
+	"bank": 0, "zones": [], "selected_zone": "", "stats": {},
 }
 var _modal: Control
 var _window: PanelContainer
@@ -104,7 +103,7 @@ func _build() -> void:
 	_modal.add_child(shade)
 	_window = PanelContainer.new()
 	_window.name = "BaseWindow"
-	_window.add_theme_stylebox_override("panel", UI.panel(UI.PANEL, UI.BORDER, 26, 20))
+	_window.add_theme_stylebox_override("panel", UI.panel(UI.PANEL, UI.BORDER, 26, 2))
 	_modal.add_child(_window)
 	_window.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
 	var content := _column(_window, "Content", 18)
@@ -131,7 +130,7 @@ func _build() -> void:
 	var section := _label("目的地", 22, "ZonesTitle")
 	section.add_theme_color_override("font_color", UI.MUTED)
 	choices.add_child(section)
-	var zone_scroll := ScrollContainer.new()
+	var zone_scroll := TouchScroll.new()
 	zone_scroll.name = "ZoneScroll"
 	zone_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	zone_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -142,7 +141,7 @@ func _build() -> void:
 	details.name = "ZoneDetailCard"
 	details.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	details.size_flags_stretch_ratio = 1.0
-	details.add_theme_stylebox_override("panel", UI.panel(Color("#142638"), UI.BORDER, 24, 16))
+	details.add_theme_stylebox_override("panel", UI.panel(Palette.DEEP_SLATE, UI.BORDER, 24, 2))
 	body.add_child(details)
 	var fields := _column(details, "Details", 18)
 	var eyebrow := _label("本次远征", 20, "ExpeditionLabel")
@@ -170,8 +169,8 @@ func _build() -> void:
 	_deploy_button = _button("开始远征", "DeployButton", _request_deploy)
 	_deploy_button.custom_minimum_size.y = 62
 	_deploy_button.add_theme_font_size_override("font_size", 24)
-	_deploy_button.add_theme_stylebox_override("normal", UI.panel(Color("#23554d"), UI.ACCENT, 12, 10))
-	_deploy_button.add_theme_stylebox_override("hover", UI.panel(Color("#2c695b"), UI.ACCENT, 12, 10))
+	_deploy_button.add_theme_stylebox_override("normal", UI.panel(Palette.TEAL_SHADOW, UI.ACCENT, 12, 2))
+	_deploy_button.add_theme_stylebox_override("hover", UI.panel(Palette.TEAL_SHADOW, Palette.CYAN_LIGHT, 12, 2))
 	fields.add_child(_deploy_button)
 	var fee_help := _label("出发时扣除门票", 20, "FeeHelp")
 	fee_help.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -218,8 +217,8 @@ func _refresh_zones(bank: int) -> void:
 		var widgets: Dictionary = _zone_controls[id]
 		var chosen := id == str(_state.selected_zone)
 		widgets.button.set_pressed_no_signal(chosen)
-		widgets.button.add_theme_stylebox_override("normal", UI.panel(Color("#1b403c") if chosen else Color("#1a2b3d"), UI.ACCENT if chosen else UI.BORDER, 12, 12))
-		widgets.button.add_theme_stylebox_override("pressed", UI.panel(Color("#1b403c"), UI.ACCENT, 12, 12))
+		widgets.button.add_theme_stylebox_override("normal", UI.panel(Palette.TEAL_SHADOW if chosen else Palette.DEEP_SLATE, UI.ACCENT if chosen else UI.BORDER, 12, 2))
+		widgets.button.add_theme_stylebox_override("pressed", UI.panel(Palette.TEAL_SHADOW, UI.ACCENT, 12, 2))
 		widgets.title.text = str(zone.get("name", id))
 		widgets.title.add_theme_color_override("font_color", UI.ACCENT if chosen else UI.TEXT)
 		var fee := maxi(0, int(zone.get("fee", 0)))

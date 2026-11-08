@@ -66,7 +66,7 @@ func run() -> void:
 	panel.upgrade_requested.connect(func(id: String) -> void: requested.append(id))
 	panel.open()
 	check(panel.is_open and not paused, "opening panel leaves pause ownership with the caller")
-	check(panel._nodes.size() == 28 and SkillTree.EQUIPMENT_BRANCHES.size() == 8, "eight equipment branches and two museum branches expose twenty-eight tier nodes")
+	check(panel._nodes.size() == 30 and SkillTree.EQUIPMENT_BRANCHES.size() == 8, "eight equipment branches and two museum branches expose thirty tier nodes")
 	check(panel.node_state("excavation_range", 1) == "available" and panel.node_state("excavation_range", 2) == "locked", "range upgrades follow their own affordable tier chain")
 	panel.select_node("excavation_range", 1)
 	check(panel._detail_values.text.contains("半径 14 米") and panel._detail_values.text.contains("半径 18 米") and panel._detail_values.text.contains("28 → 36"), "range details distinguish radius and map diameter")

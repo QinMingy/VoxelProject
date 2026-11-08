@@ -5,6 +5,12 @@ const Terrain = preload("res://terrain.gd")
 const Crystal = preload("res://crystal.gd")
 const Appraisal = preload("res://appraisal.gd")
 
+func known_relics() -> Array:
+	var result: Array = []
+	for definition: Dictionary in Main.AdventureItems.ITEMS:
+		result.append(str(definition.id))
+	return result
+
 var test_failed := false
 
 func _initialize() -> void:
@@ -131,8 +137,8 @@ func run() -> void:
 		if item.item_type == "crystal":
 			require(is_equal_approx(bounds.size.y, [4.0, 5.0, 6.0][item.size_tier] * Terrain.CELL_SIZE), "three crystal heights occupy exactly four, five or six terrain cells")
 		else:
-			require(item.item_type in ["chest", "shield", "hammer"] and not item.get_world_cells().is_empty(), "adventure specimens use a known type and an occupied voxel shape")
-			require(bounds.size.x >= Terrain.CELL_SIZE and bounds.size.y >= Terrain.CELL_SIZE and bounds.size.z >= Terrain.CELL_SIZE and maxf(bounds.size.x, maxf(bounds.size.y, bounds.size.z)) <= 1.5, "rotated adventure relics have finite voxel bounds within their source-size budget")
+			require(item.item_type in known_relics() and not item.get_world_cells().is_empty(), "adventure specimens use a known type and an occupied voxel shape")
+			require(bounds.size.x >= Terrain.CELL_SIZE and bounds.size.y >= Terrain.CELL_SIZE and bounds.size.z >= Terrain.CELL_SIZE and maxf(bounds.size.x, maxf(bounds.size.y, bounds.size.z)) <= 3.0, "rotated adventure relics have finite voxel bounds within the giant-variant budget")
 			for extent in [bounds.size.x, bounds.size.y, bounds.size.z]:
 				require(is_equal_approx(extent / Terrain.CELL_SIZE, roundf(extent / Terrain.CELL_SIZE)), "adventure relic bounds remain aligned to terrain-sized voxels")
 		if not item.is_exposed(terrain):
@@ -148,7 +154,7 @@ func run() -> void:
 	buried.refresh_exposure(terrain)
 	require(is_zero_approx(buried.exposure_ratio) and not buried.is_loose(), "buried object has no exposed surface and cannot release before excavation")
 	game.pick_up_cluster()
-	require(not buried.collected and game.packed_specimens.is_empty(), "F cannot collect buried object")
+	require(not buried.collected and game.inventory.items.is_empty(), "F cannot collect buried object")
 	# Dig a perimeter, because a centre-only ray now correctly stops at crystal.
 	var bounds := buried.get_local_bounds()
 	var center_point := buried.position + bounds.get_center()

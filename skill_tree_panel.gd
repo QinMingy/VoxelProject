@@ -1,4 +1,5 @@
 extends CanvasLayer
+const TouchScroll = preload("res://touch_scroll.gd")
 
 signal opened
 signal closed
@@ -7,12 +8,13 @@ signal feedback(event: String)
 
 const UI = preload("res://ui_style.gd")
 const Progression = preload("res://progression.gd")
+const Palette = preload("res://palette.gd")
 const EQUIPMENT_BRANCHES := ["drill", "mining_radius", "oxygen", "oxygen_supply", "boots", "backpack", "detector", "excavation_range"]
 const MUSEUM_BRANCHES := ["museum_capacity", "museum_appeal"]
 const BRANCHES := ["drill", "mining_radius", "oxygen", "oxygen_supply", "boots", "backpack", "detector", "excavation_range", "museum_capacity", "museum_appeal"]
-const ROMAN := ["I", "II", "III"]
+const ROMAN := ["I", "II", "III", "IV"]
 const NODE_SIZE := Vector2(128, 58)
-const NODE_X := [148.0, 328.0, 508.0]
+const NODE_X := [148.0, 328.0, 508.0, 688.0]
 const FIRST_Y := 44.0
 const ROW_GAP := 66.0
 
@@ -40,7 +42,7 @@ class TreeLinks extends Control:
 			for tier in range(2, maximum + 1):
 				var begin := Vector2(NODE_X[tier - 2] + NODE_SIZE.x, y)
 				var end := Vector2(NODE_X[tier - 1], y)
-				var color := UI.ACCENT if level >= tier else (Color("#536f80") if level == tier - 1 else UI.BORDER)
+				var color := UI.ACCENT if level >= tier else (Palette.MOON_BLUE if level == tier - 1 else UI.BORDER)
 				draw_line(begin, end, color, 3.0 if level >= tier else 2.0, true)
 				var key := "%s:%d" % [id, tier]
 				var flash := float(flashes.get(key, 0.0))
@@ -150,7 +152,7 @@ func _build() -> void:
 	_window = PanelContainer.new()
 	_window.name = "SkillTreeWindow"
 	_window.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	_window.add_theme_stylebox_override("panel", UI.panel(UI.PANEL, UI.BORDER, 20, 18))
+	_window.add_theme_stylebox_override("panel", UI.panel(UI.PANEL, UI.BORDER, 20, 2))
 	_modal.add_child(_window)
 	var contents := VBoxContainer.new()
 	contents.add_theme_constant_override("separation", 12)
@@ -186,7 +188,7 @@ func _build() -> void:
 	body.add_theme_constant_override("separation", 16)
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	contents.add_child(body)
-	_tree_scroll = ScrollContainer.new()
+	_tree_scroll = TouchScroll.new()
 	_tree_scroll.name = "SkillTreeScroll"
 	_tree_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_tree_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -194,12 +196,12 @@ func _build() -> void:
 	body.add_child(_tree_scroll)
 	_links = TreeLinks.new()
 	_links.name = "TreeCanvas"
-	_links.custom_minimum_size = Vector2(674, FIRST_Y + (EQUIPMENT_BRANCHES.size() - 1) * ROW_GAP + NODE_SIZE.y + 12)
+	_links.custom_minimum_size = Vector2(854, FIRST_Y + (EQUIPMENT_BRANCHES.size() - 1) * ROW_GAP + NODE_SIZE.y + 12)
 	_links.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_links.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_links.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_tree_scroll.add_child(_links)
-	for tier in range(3):
+	for tier in range(NODE_X.size()):
 		var caption := _label("阶级 " + ROMAN[tier], 18, UI.MUTED)
 		caption.position = Vector2(NODE_X[tier], 8)
 		caption.size = Vector2(NODE_SIZE.x, 28)
@@ -230,7 +232,7 @@ func _build() -> void:
 			button.focus_exited.connect(_hover_node.bind(id, tier, false))
 			_links.add_child(button)
 			_nodes[_key(id, tier)] = button
-	_details_scroll = ScrollContainer.new()
+	_details_scroll = TouchScroll.new()
 	_details_scroll.name = "SkillDetailsScroll"
 	_details_scroll.custom_minimum_size.x = 282
 	_details_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -241,7 +243,7 @@ func _build() -> void:
 	details.custom_minimum_size.x = 282
 	details.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	details.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	details.add_theme_stylebox_override("panel", UI.panel(Color("#132536"), UI.BORDER, 16, 12))
+	details.add_theme_stylebox_override("panel", UI.panel(Palette.INK, UI.BORDER, 16, 2))
 	_details_scroll.add_child(details)
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 14)
@@ -344,7 +346,7 @@ func _refresh() -> void:
 	_balance.text = "资金 %d\n研究 %d" % [int(_state.bank), int(_state.research_points)]
 	var active: Array = EQUIPMENT_BRANCHES if _active_tab == "equipment" else MUSEUM_BRANCHES
 	for tab: String in _tab_buttons:
-		(_tab_buttons[tab] as Button).add_theme_stylebox_override("normal", UI.panel(Color("#20473f") if tab == _active_tab else Color("#172635"), UI.ACCENT if tab == _active_tab else UI.BORDER, 10, 8))
+		(_tab_buttons[tab] as Button).add_theme_stylebox_override("normal", UI.panel(Palette.TEAL_SHADOW if tab == _active_tab else Palette.DEEP_SLATE, UI.ACCENT if tab == _active_tab else UI.BORDER, 10, 2))
 	var levels := {}
 	for id: String in BRANCHES:
 		var definition: Dictionary = Progression.UPGRADES[id]
@@ -358,12 +360,12 @@ func _refresh() -> void:
 			var selected := id == _selected_id and tier == _selected_tier
 			button.visible = id in active
 			var border := UI.ACCENT if state in ["purchased", "available"] else UI.BORDER
-			var fill := Color("#20473f") if state == "purchased" else (Color("#1a3943") if state == "available" else Color("#172635"))
-			var style := UI.panel(fill, UI.TEXT if selected else border, 4, 11)
+			var fill := Palette.TEAL_SHADOW if state == "purchased" else (Palette.DEEP_SLATE if state == "available" else Palette.INK)
+			var style := UI.panel(fill, UI.TEXT if selected else border, 4, 2)
 			style.set_border_width_all(2 if selected else 1)
 			button.add_theme_stylebox_override("normal", style)
-			button.add_theme_stylebox_override("hover", UI.panel(fill.lightened(0.1), UI.ACCENT, 4, 11))
-			button.add_theme_stylebox_override("pressed", UI.panel(fill.lightened(0.15), UI.TEXT, 4, 11))
+			button.add_theme_stylebox_override("hover", UI.panel(fill, Palette.CYAN_LIGHT, 4, 2))
+			button.add_theme_stylebox_override("pressed", UI.panel(fill, UI.TEXT, 4, 2))
 			button.add_theme_color_override("font_color", UI.TEXT if state in ["purchased", "available"] else UI.MUTED)
 			var research_cost := _research_cost(id, tier)
 			var price := "%d 点" % research_cost if research_cost > 0 else "%d" % int(definition.costs[tier - 1])

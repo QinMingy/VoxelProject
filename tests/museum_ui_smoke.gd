@@ -1,134 +1,254 @@
 extends SceneTree
 
-const MuseumPanel = preload("res://museum_panel.gd")
-var failed := false
-var requested: Array = []
+# The warehouse is a drawer over Main's persistent hall. Both save owners are
+# in memory; only optional native screenshot files are written.
+const Main = preload("res://main.gd")
+const OUT := "res://.build/museum-ui-preview"
+var game: Node3D
+var panel: CanvasLayer
+var scene: Node3D
 
 func _initialize() -> void:
 	call_deferred("run")
 
 func check(value: bool, description: String) -> void:
 	if not value:
-		failed = true
 		push_error("MUSEUM UI FAIL: " + description)
 		quit(1)
 		assert(value, description)
 
-func item(uid: int, kind: String, wear: int = 10, tier: int = 0) -> Dictionary:
-	return {"uid": uid, "item_type": kind, "item_name": ["小型晶石", "中型晶石", "大型晶石"][tier] if kind == "crystal" else {"chest": "冒险宝箱", "shield": "冒险者盾牌", "hammer": "遗落战锤"}[kind], "label": kind, "wear": wear, "base_value": 180 if kind == "crystal" else 800, "footprint": [Vector2i(1, 1), Vector2i(1, 2), Vector2i(2, 2)][tier] if kind == "crystal" else Vector2i(2, 2)}
-
-func state(warehouse: Array, exhibits: Dictionary, slots: Array, capacity: int = 3) -> Dictionary:
-	return {"bank": 150, "research_points": 4, "message": "", "museum": {"warehouse": warehouse, "exhibits": exhibits, "slots": slots, "capacity": capacity, "appeal": 1.0, "income": 24, "identified_types": ["chest", "shield", "hammer", "crystal"], "max_level": 3}}
-
-func capture(panel: CanvasLayer, filename: String) -> void:
+func settle_ui() -> void:
 	await create_timer(0.25, true).timeout
-	var screen := Rect2(Vector2.ZERO, Vector2(root.size))
-	check(screen.encloses(panel._window.get_global_rect()), "museum state stays on screen: " + filename)
-	for button: Button in [panel._donate_button, panel._sell_button]:
-		if button.is_visible_in_tree():
-			check(screen.encloses(button.get_global_rect()), "warehouse actions remain visible: " + filename)
-	if DisplayServer.get_name() != "headless":
-		await RenderingServer.frame_post_draw
-		DirAccess.make_dir_recursive_absolute("res://.build/museum-ui-preview")
-		check(root.get_texture().get_image().save_png("res://.build/museum-ui-preview/" + filename + ".png") == OK, "save native state " + filename)
+	await process_frame
+
+func button_named(node_name: String) -> Button:
+	var button := panel.find_child(node_name, true, false) as Button
+	check(button != null, "production drawer button exists: " + node_name)
+	return button
+
+func reveal(control: Control) -> void:
+	await process_frame
+	var parent := control.get_parent()
+	while parent != null and parent != panel:
+		if parent is ScrollContainer:
+			parent.ensure_control_visible(control)
+			await process_frame
+		parent = parent.get_parent()
+	await process_frame
+	var bounds := control.get_global_rect()
+	check(root.get_visible_rect().grow(1).encloses(bounds), "scrolling exposes the whole action: " + str(control.name))
+	parent = control.get_parent()
+	while parent != null and parent != panel:
+		if parent is ScrollContainer:
+			check(parent.get_global_rect().grow(1).encloses(bounds), "action is not clipped by its scroll viewport: " + str(control.name))
+		parent = parent.get_parent()
 
 func pointer_click(button: Button) -> void:
-	check(button.is_visible_in_tree() and not button.disabled, "real pointer target is visible and enabled")
+	check(button.is_visible_in_tree() and not button.disabled, "real pointer target is visible and enabled: " + str(button.name))
+	await reveal(button)
 	var at := button.get_global_rect().get_center()
 	var motion := InputEventMouseMotion.new()
 	motion.position = at
 	motion.global_position = at
 	root.push_input(motion, true)
 	for pressed: bool in [true, false]:
-		var click := InputEventMouseButton.new()
-		click.button_index = MOUSE_BUTTON_LEFT
-		click.position = at
-		click.global_position = at
-		click.pressed = pressed
-		root.push_input(click, true)
-	await process_frame
+		var event := InputEventMouseButton.new()
+		event.button_index = MOUSE_BUTTON_LEFT
+		event.position = at
+		event.global_position = at
+		event.pressed = pressed
+		root.push_input(event, true)
+	await settle_ui()
+
+func specimen(key: String) -> Dictionary:
+	return Main.Progression.Museum.definition(key)
+
+func collect(cargo: Array) -> Dictionary:
+	var trip: Dictionary = game.progression.pay_entry("meadow", true)
+	check(trip.ok, "memory fixture opens a real expedition ledger")
+	var receipt: Dictionary = game.progression.settle_expedition(int(trip.trip_id), cargo, false, 65.0)
+	check(receipt.ok, "memory fixture settles validated cargo")
+	game.sync_base_state()
+	return receipt
+
+func check_pure_drawer(node: Node) -> void:
+	check(not node is SubViewport and not node is Node3D, "warehouse UI does not instantiate another 3D world")
+	for child: Node in node.get_children():
+		check_pure_drawer(child)
+
+func check_touch_buttons(node: Node) -> void:
+	if node is Button and node.is_visible_in_tree():
+		check(node.size.x >= 48 and node.size.y >= 48, "drawer action has at least a 48px touch target: " + str(node.name))
+	for child: Node in node.get_children():
+		check_touch_buttons(child)
+
+func capture(filename: String) -> void:
+	await settle_ui()
+	check(root.get_visible_rect().grow(1).encloses(panel._window.get_global_rect()), "left drawer stays on screen: " + filename)
+	check(panel._window.size.x < root.get_visible_rect().size.x * 0.5, "the drawer leaves the shared hall exposed")
+	if DisplayServer.get_name() != "headless":
+		await RenderingServer.frame_post_draw
+		check(DirAccess.make_dir_recursive_absolute(OUT) == OK, "create isolated native preview directory")
+		check(root.get_texture().get_image().save_png(OUT + "/" + filename + ".png") == OK, "save native drawer preview")
 
 func run() -> void:
+	create_timer(90.0, true).timeout.connect(func() -> void:
+		push_error("MUSEUM UI timed out")
+		quit(2))
+	root.content_scale_size = Vector2i(1100, 720)
 	root.size = Vector2i(1100, 720)
-	var panel := MuseumPanel.new()
-	root.add_child(panel)
-	panel.sync_state(state([], {}, ["", "", "", "", "", ""]))
-	panel.open()
-	check(panel._display._models.is_empty(), "new museum does not fabricate pre-filled exhibits")
-	check(panel._viewport.render_target_update_mode == SubViewport.UPDATE_ALWAYS, "opening activates the real 3D room")
-	paused = true
-	await create_timer(0.3, true).timeout
-	await capture(panel, "museum-empty-1100")
-	var initial := state([item(11, "chest")], {}, ["", "", "", "", "", ""])
-	initial.museum.identified_types = []
-	panel.sync_state(initial)
-	panel.select_warehouse_item(11)
-	check(panel._detail_info.text.contains("售价？") and panel._sell_button.text == "出售并鉴定", "unknown warehouse price stays hidden until first registration or sale")
-	await capture(panel, "museum-warehouse-unknown-1100")
-	panel.donate_requested.connect(func(uid: int) -> void: requested.append(uid))
-	await pointer_click(panel._donate_button)
-	panel._donate_button.pressed.emit()
-	check(requested == [11] and panel._donate_button.disabled and panel._sell_button.disabled, "donation uses owner-only request and guards pending duplicate clicks")
-	var exhibits := {"chest": {"key": "chest", "label": "冒险宝箱", "item": item(11, "chest"), "level": 1, "count": 1}}
-	panel.sync_state(state([item(12, "shield")], exhibits, ["chest", "", "", "", "", ""]))
-	check(panel._display._models.size() == 1 and panel._display.displayed_keys == ["chest"], "only actual registered displayed item appears in museum")
-	var model: Node3D = panel._display._models[0]
-	check(model.item_type == "chest" and model.get_world_cells().size() == 384, "display reuses the actual canonical voxel treasure chest")
-	panel.select_exhibit("chest")
+	game = Main.new()
+	game.progression = Main.Progression.new("")
+	game.progression.bank = 10000
+	game.appraisal = Main.Appraisal.new("")
+	game.wants_mouse_capture = false
+	root.add_child(game)
+	game.set_process(false)
+	game.set_physics_process(false)
+	game.set_process_unhandled_input(false)
+	game.sfx.set_muted(true)
+	await settle_ui()
+	game.show_outpost("lobby")
+	game.show_outpost("museum")
+	panel = game.museum_panel
+	scene = game.outpost_panel.lobby.scene
+	await settle_ui()
+	check_pure_drawer(panel)
+	check(paused and panel.is_open and game.outpost_panel.is_open and scene._active,
+		"warehouse drawer shares the live paused exhibition")
+	check(scene._models.is_empty() and game.progression.museum_state.items.is_empty(),
+		"fresh drawer and room contain no invented items")
+	var shared_id: int = scene.get_instance_id()
+	var camera_id: int = scene.camera.get_instance_id()
+	await capture("museum-empty-1100")
+
+	collect([specimen("chest")])
+	check(game.progression.museum_state.items.chest.copies == 1 and scene.displayed_keys == ["chest"],
+		"the first find is owned and displayed automatically")
+	var model: Node3D = scene._models[0]
+	check(model is Main.Crystal and model.item_type == "chest" and model.get_world_cells().size() == 384,
+		"shared pedestal reuses canonical voxel treasure-chest geometry")
+	check(panel._item_list.get_child_count() == 1 and panel._item_buttons.has("chest"),
+		"merged drawer lists only owned item types")
+	await pointer_click(button_named("Item_chest"))
+	check(panel.selected_key == "chest" and panel._detail_info.text.contains("Lv.1")
+		and panel._detail_info.text.contains("展台收益"), "detail card shows level and expedition income")
+	check(panel._item_buttons["chest"].icon != null, "item rows carry a palette swatch instead of a live render target")
+	check(panel._item_buttons["chest"].find_child("ExhibitTag_chest", true, false) != null,
+		"displayed items carry an exhibit tag in the list")
+	await capture("museum-items-1100")
+
 	panel.select_stand(1)
-	check(panel._place_button.is_visible_in_tree() and panel._place_button.text.contains("02"), "catalogue placement clearly targets the selected pedestal")
-	var placements: Array = []
-	panel.place_requested.connect(func(key: String, slot: int) -> void: placements.append([key, slot]))
-	panel._place_button.pressed.emit()
-	check(placements == [["chest", 1]], "placement delegates the selected actual key and pedestal to owner")
-	panel.sync_state(state([], exhibits, ["", "chest", "", "", "", ""]))
-	check(panel._display._models.has(1) and not panel._display._models.has(0), "changed owner placement moves the actual museum model")
-	panel._clear_button.pressed.emit()
-	check(placements == [["chest", 1], ["", 1]], "clearing a display requests moving it back into the collection")
-	var slots := ["crystal_small", "crystal_medium", "crystal_large", "chest", "shield", "hammer"]
-	exhibits = {}
-	for index in range(slots.size()):
-		var kind: String = "crystal" if index < 3 else slots[index]
-		var snapshot := item(20 + index, kind, index * 8, index if index < 3 else 0)
-		exhibits[slots[index]] = {"key": slots[index], "label": snapshot.item_name, "item": snapshot, "level": 3, "count": 3}
-	panel.sync_state(state([item(77, "hammer", 4), item(78, "crystal", 55)], exhibits, slots, 6))
-	panel.select_warehouse_item(77)
-	check(not panel._donate_button.disabled and panel._donate_button.text == "替换更好品相", "max-level collection can still replace a worse exemplar")
-	panel.select_warehouse_item(78)
-	check(panel._donate_button.disabled and panel._donate_button.text == "展品已满级", "max-level worse duplicate does not silently consume the item")
-	check(panel._display._models.size() == 6, "all six real specimen types can be displayed after expansion")
-	await pointer_click(panel._catalogue_tab)
-	check(panel._tab == "catalogue", "real pointer switches to catalogue tab")
-	await pointer_click(panel._warehouse_tab)
-	check(panel._tab == "warehouse", "real pointer switches back to warehouse")
-	var yaw_before: float = panel._display._yaw
-	var drag := InputEventScreenDrag.new()
-	drag.relative = Vector2(10, 0)
-	panel._room_input(drag)
-	var emulated := InputEventMouseMotion.new()
-	emulated.device = InputEvent.DEVICE_ID_EMULATION
-	emulated.relative = Vector2(10, 0)
-	emulated.button_mask = MOUSE_BUTTON_MASK_LEFT
-	panel._room_input(emulated)
-	check(is_equal_approx(panel._display._yaw, yaw_before - 0.03), "touch drag and its emulated mouse motion only orbit the room once")
-	for resolution in [Vector2i(1100, 720), Vector2i(1600, 720)]:
+	await settle_ui()
+	check(panel.selected_stand == 1 and scene.selected_stand == 1 and panel.selected_key.is_empty()
+		and panel._action_button.text == "空展台", "selecting an empty stand clears the list selection")
+	await pointer_click(button_named("Item_chest"))
+	check(panel.selected_key == "chest" and panel._action_button.text == "安装",
+		"choosing an item stages it for installation")
+	await pointer_click(button_named("NextStandButton"))
+	check(panel.selected_stand == 2 and scene.selected_stand == 2 and panel.selected_key.is_empty(),
+		"arrow switching clears the staged item")
+	await pointer_click(button_named("PrevStandButton"))
+	check(panel.selected_stand == 1 and scene.selected_stand == 1, "arrow returns to the previous stand")
+	await pointer_click(button_named("Item_chest"))
+	check(is_instance_valid(scene._preview_model), "the selected item previews its model on the chosen stand")
+	await settle_ui()
+	check(scene.camera.global_position.distance_to(scene.LOCATIONS[1] + Vector3.UP * scene.FOCUS_HEIGHT) < scene.FOCUS_DISTANCE + 1.5,
+		"selecting a stand swings the shared camera onto it")
+	await capture("museum-focus-1100")
+	await pointer_click(panel._action_button)
+	check(game.progression.museum_state.slots[1] == "chest" and scene._models.has(1) and not scene._models.has(0),
+		"install moves the specimen to the chosen pedestal")
+	check(not is_instance_valid(scene._preview_model), "installed item replaces the preview with the real display")
+	check(panel.selected_key.is_empty() and panel._detail_info.text.contains("当前陈列"),
+		"after install the panel shows the stand's own display")
+	check(panel._action_button.text == "拆卸", "the same action becomes remove once installed")
+	await pointer_click(panel._action_button)
+	check(game.progression.museum_state.slots[1] == "" and scene._models.is_empty()
+		and game.progression.museum_state.items.has("chest"), "remove keeps the owned specimen in the collection")
+	check(panel._item_buttons["chest"].find_child("ExhibitTag_chest", true, false) == null,
+		"removing the exhibit clears its list tag")
+	check(panel._action_button.disabled and panel._action_button.text == "空展台", "an emptied stand awaits a new choice")
+	await pointer_click(button_named("Item_chest"))
+	await pointer_click(panel._action_button)
+	check(scene._models.has(1), "a removed specimen can be installed again")
+
+	for level in range(3):
+		var cargo: Array = []
+		for category: Dictionary in Main.Progression.Museum.CATEGORIES:
+			if str(category.key) == "chest" and level == 0:
+				continue
+			cargo.append(specimen(str(category.key)))
+		collect(cargo)
+	check(game.progression.museum_state.items.size() == Main.Progression.Museum.CATEGORIES.size() and game.progression.museum_state.items.chest.copies == 3,
+		"duplicates accumulate only on their own item type")
+	check(Main.Progression.Museum.level_for(3) == 2 and panel._item_buttons.has("crystal_small"),
+		"duplicates raise the item's level and appear in the merged list")
+	for expected_capacity: int in [12, 24]:
+		check(game.progression.buy_upgrade("museum_capacity").ok, "actual capacity research succeeds")
+		game.sync_base_state()
+		check(scene._capacity == expected_capacity, "shared room reflects purchased capacity")
+	for index in range(Main.Progression.Museum.CATEGORIES.size()):
+		var key: String = Main.Progression.Museum.CATEGORIES[index].key
+		game.on_museum_place(key, index)
+	check(scene._models.size() == Main.Progression.Museum.CATEGORIES.size(), "every owned specimen is rendered by the same persistent room")
+	panel.select_stand(1)
+	panel.select_item("crystal_small")
+	await settle_ui()
+	check(panel._action_button.text == "替换", "an occupied stand offers replace instead of install")
+	await pointer_click(panel._action_button)
+	check(game.progression.museum_state.slots[1] == "crystal_small"
+		and game.progression.museum_state.items.has("chest"), "replace swaps the display without losing either item")
+	check(scene.get_instance_id() == shared_id and scene.camera.get_instance_id() == camera_id,
+		"placement updates preserve room and camera identities")
+
+	var scroll_rect: Rect2 = panel._item_scroll.get_global_rect()
+	var key_before: String = panel.selected_key
+	var touch_press := InputEventScreenTouch.new()
+	touch_press.index = 0
+	touch_press.position = scroll_rect.position + Vector2(40, scroll_rect.size.y - 24)
+	touch_press.pressed = true
+	root.push_input(touch_press, true)
+	for step in range(4):
+		var drag := InputEventScreenDrag.new()
+		drag.index = 0
+		drag.position = touch_press.position + Vector2(0, -30.0 * float(step + 1))
+		drag.relative = Vector2(0, -30)
+		drag.screen_relative = Vector2(0, -30)
+		root.push_input(drag, true)
+		await process_frame
+	var touch_release := InputEventScreenTouch.new()
+	touch_release.index = 0
+	touch_release.position = touch_press.position + Vector2(0, -120)
+	touch_release.pressed = false
+	root.push_input(touch_release, true)
+	await settle_ui()
+	check(panel._item_scroll.scroll_vertical > 20, "touch drag scrolls the warehouse list")
+	check(panel.selected_key == key_before, "dragging the list does not select a row")
+
+	for resolution: Vector2i in [Vector2i(960, 540), Vector2i(1100, 720), Vector2i(1600, 720)]:
+		root.content_scale_size = resolution
 		root.size = resolution
-		panel.select_exhibit("chest")
+		await settle_ui()
 		panel.select_stand(3)
-		await create_timer(0.4, true).timeout
-		var screen := Rect2(Vector2.ZERO, Vector2(resolution))
-		check(screen.encloses(panel._window.get_global_rect()), "museum window fits " + str(resolution))
-		for control in [panel._viewport_container, panel._detail_name, panel._place_button, panel._clear_button, panel._income]:
-			check(screen.encloses(control.get_global_rect()), "visible museum controls remain on screen")
-		if DisplayServer.get_name() != "headless":
-			await RenderingServer.frame_post_draw
-			DirAccess.make_dir_recursive_absolute("res://.build/museum-ui-preview")
-			check(root.get_texture().get_image().save_png("res://.build/museum-ui-preview/museum-%d.png" % resolution.x) == OK, "save native museum preview")
-	panel.close()
-	check(paused and panel._viewport.render_target_update_mode == SubViewport.UPDATE_DISABLED and not panel._display._active, "closing releases museum rendering without changing owner pause")
-	paused = false
-	panel.queue_free()
+		await settle_ui()
+		check(scene.selected_stand == 3, "stand selection stays connected after logical viewport resize")
+		check_touch_buttons(panel)
+		for control: Control in [panel._action_button, button_named("ResearchButton")]:
+			await reveal(control)
+		await capture("museum-focus-%d" % resolution.x)
+
+	await pointer_click(button_named("CloseButton"))
+	check(game.outpost_page == "lobby" and paused and not panel.is_open
+		and scene.selected_stand == -1, "closing returns to the active shared hall and clears only its selection")
+	await settle_ui()
+	check(scene.zoom == 1.0 and absf(scene.camera.global_position.distance_to(
+		scene.ZONE_CENTERS[scene.current_zone] + Vector3(0, 0.1, 0)) - scene.OVERVIEW_BASE_DISTANCE) < 0.5,
+		"closing the drawer resets zoom and returns the shared camera to the zone overview")
+	check(game.progression.profile_path.is_empty() and game.appraisal.catalogue_path.is_empty(),
+		"no test action enabled persistent saves")
+	game.queue_free()
 	await process_frame
-	await create_timer(0.1).timeout
-	print("MUSEUM_UI_OK real_voxel_display=true warehouse_actions=true catalogue_placement=true pending_guard=true hidden_render_disabled=true fits1100_1600=true")
-	quit(1 if failed else 0)
+	await create_timer(0.15, true).timeout
+	print("MUSEUM_UI_OK pure_drawer=true shared_scene=true real_collection=true merged_list=true stand_focus=true touch_targets48=true escape_once=true sizes_960_1100_1600=true in_memory=true")
+	quit(0)

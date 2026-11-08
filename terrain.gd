@@ -1,4 +1,5 @@
 extends Node3D
+const Palette = preload("res://palette.gd")
 
 const CELL_SIZE := 0.125
 const GRID_SIZE := 512
@@ -28,11 +29,11 @@ const FACE_CORNERS := [[4, 5, 6, 7], [0, 3, 2, 1], [2, 6, 5, 1], [0, 4, 7, 3], [
 const EPSILON := 0.00001
 const STARTER_VEIN := Vector2(-3.56, 5.18)
 
-const TOP_SOIL := Color("#737984")
-const MIDDLE_SOIL := Color("#aa7349")
-const DEEP_SOIL := Color("#55526d")
-const ORE_SHADOW := Color("#159f8b")
-const ORE_HIGHLIGHT := Color("#93fff0")
+const TOP_SOIL := Palette.MOON_BLUE
+const MIDDLE_SOIL := Palette.SLATE
+const DEEP_SOIL := Palette.DEEP_SLATE
+const ORE_SHADOW := Palette.TEAL
+const ORE_HIGHLIGHT := Palette.CYAN_LIGHT
 
 enum Brush { BOWL, DISK, PUNCH }
 
@@ -133,7 +134,8 @@ void fragment() {
 	if (texture(detail_mask, uv).r > 0.5) { discard; }
 	vec2 cell = floor(ground_position.xz * cell_density);
 	float grain = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
-	ALBEDO = vec3(0.451, 0.475, 0.518) * mix(0.86, 1.08, grain);
+	// Same vertex-colour path and shade range as the detailed chunks.
+	ALBEDO = COLOR.rgb * mix(0.83, 1.12, grain);
 	ROUGHNESS = 0.96;
 }
 """
@@ -243,9 +245,11 @@ func natural_height_at(x: float, z: float) -> float:
 func _build_far_ground() -> void:
 	var vertices := PackedVector3Array()
 	var normals := PackedVector3Array()
+	var colors := PackedColorArray()
 	var indices := PackedInt32Array()
 	vertices.resize((FAR_COUNT + 1) * (FAR_COUNT + 1))
 	normals.resize(vertices.size())
+	colors.resize(vertices.size())
 	_far_heights.resize(vertices.size())
 	for z in range(FAR_COUNT + 1):
 		for x in range(FAR_COUNT + 1):
@@ -255,6 +259,7 @@ func _build_far_ground() -> void:
 			_far_heights[index] = natural_height_at(wx, wz)
 			vertices[index] = Vector3(wx, _far_heights[index], wz)
 			normals[index] = Vector3.UP
+			colors[index] = TOP_SOIL
 	for z in range(FAR_COUNT):
 		for x in range(FAR_COUNT):
 			var a := z * (FAR_COUNT + 1) + x
@@ -266,6 +271,7 @@ func _build_far_ground() -> void:
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = vertices
 	arrays[Mesh.ARRAY_NORMAL] = normals
+	arrays[Mesh.ARRAY_COLOR] = colors
 	arrays[Mesh.ARRAY_INDEX] = indices
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)

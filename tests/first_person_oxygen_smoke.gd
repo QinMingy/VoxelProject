@@ -214,7 +214,7 @@ func run() -> void:
 	check(int(report.oxygen_grains) == collected and is_equal_approx(float(report.oxygen_recovered), recovered),
 		"settlement includes actual pickup, excluding airborne grains")
 	check(game.gain_oxygen(20) == 0.0, "base cannot use a moon pickup")
-	check(game.progression.museum_state.warehouse.is_empty() and game.progression.museum_state.exhibits.is_empty(), "oxygen-only excursion creates neither persistent cargo nor fabricated exhibits")
+	check(game.progression.museum_state.items.is_empty(), "oxygen-only excursion creates neither persistent cargo nor fabricated exhibits")
 	game.sfx.set_muted(true)
 	await create_timer(0.10, true).timeout
 	game.queue_free()

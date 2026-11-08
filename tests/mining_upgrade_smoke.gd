@@ -75,7 +75,7 @@ func run() -> void:
 			for item: Node3D in game.crystals:
 				if item.item_type != "crystal":
 					relic_count += 1
-				check(item.wear_percent >= int(zone.wear_range[0]) and item.wear_percent <= int(zone.wear_range[1]), "actual spawned wear follows the mine's value profile")
+				check(item.wear_percent == 0, "spawned specimens no longer carry wear")
 			check(game.crystals.size() == int(zone.count) and relic_count == int(zone.relic_count), "real relic count grows with deployed map area instead of staying at six")
 			game.settle(true)
 

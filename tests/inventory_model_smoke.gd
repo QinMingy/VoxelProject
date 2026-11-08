@@ -44,8 +44,8 @@ func run() -> void:
 	panel.open(bag, false, 18.0, {"id": 21, "label": "大晶石", "footprint": Vector2i(2, 2), "wear": 20, "base_value": 800})
 	panel._on_cell_clicked(Vector2i.ZERO)
 	assert(panel.selected_id == 20)
-	assert(panel._details.text.contains("估价 ?") and not panel._details.text.contains("400"), "unknown selection never leaks base value")
-	assert(panel._pending_info.text.contains("估价 ?") and not panel._pending_info.text.contains("800"), "pending unknown item never leaks base value")
+	assert(panel._details.text.contains("估价 400"), "selected item shows its catalogue price")
+	assert(panel._pending_info.text.contains("估价 800"), "pending item shows its catalogue price")
 	paused = true
 	var rotate := InputEventKey.new()
 	rotate.physical_keycode = KEY_R
@@ -53,7 +53,7 @@ func run() -> void:
 	panel._input(rotate)
 	assert(panel.preview_rotated, "rotation remains available while paused")
 	panel.refresh(true)
-	assert(panel._details.text.contains("估价 360"), "known selection estimates price from condition")
+	assert(panel._details.text.contains("估价 400"), "known selection keeps the catalogue price")
 	var close_key := InputEventKey.new()
 	close_key.physical_keycode = KEY_B
 	close_key.pressed = true
@@ -62,5 +62,5 @@ func run() -> void:
 	paused = false
 	panel.queue_free()
 	await process_frame
-	print("INVENTORY_OK bounds overlap rotations full_pack discard_replace immutable_values paused_panel hidden_prices")
+	print("INVENTORY_OK bounds overlap rotations full_pack discard_replace immutable_values paused_panel visible_prices")
 	quit(0)

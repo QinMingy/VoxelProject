@@ -26,8 +26,8 @@ func has_rigid_body(node: Node) -> bool:
 			return true
 	return false
 
-func outline(item: Node3D) -> MeshInstance3D:
-	return item.get_node("VoxelCrystal/PickupOutline") as MeshInstance3D
+func outline_quad(item: Node3D) -> MeshInstance3D:
+	return game.pickup_outline.quad_for(item)
 
 func create_specimen(site: Vector3, tier: int, wear: int) -> Crystal:
 	var item := Crystal.new()
@@ -79,7 +79,8 @@ func shot(name: String, focus: Vector3) -> void:
 	game.cursor.hide()
 	game.ring.hide()
 	game.reticle.hide()
-	await process_frame
+	for frame in range(4):
+		await process_frame
 	await RenderingServer.frame_post_draw
 	var error := root.get_texture().get_image().save_png(OUT_DIR + "/" + name + ".png")
 	require(error == OK, "native preview frame saves successfully")
@@ -112,14 +113,20 @@ func run() -> void:
 	approach(target)
 	target.refresh_exposure(game.terrain)
 	require(not target.is_loose() and target.exposure_ratio == 0.0, "fixture starts fully buried")
-	require(not outline(target).visible and not outline(target).is_visible_in_tree(), "buried specimen has no pickup outline")
-	var material := outline(target).material_override as StandardMaterial3D
-	require(material != null and not material.no_depth_test, "pickup outline obeys scene depth instead of showing through soil")
+	require(not target.wants_outline() and not game.pickup_outline.outline_visible(target), "buried specimen has no pickup outline")
 	require(not has_rigid_body(target), "specimen remains a static Node3D without rigid-body physics")
 	await shot("before", focus)
 	excavate(target)
 	approach(target)
-	require(target.is_loose() and outline(target).is_visible_in_tree(), "actual excavation turns on the collectible outline")
+	# process_frame fires before node _process, so wait two frames for the outline pass.
+	await process_frame
+	await process_frame
+	require(target.is_loose() and target.wants_outline(), "actual excavation marks the specimen collectible")
+	var ready_quad: MeshInstance3D = outline_quad(target)
+	require(ready_quad != null and ready_quad.visible, "collectible silhouette is drawn by the screen-space outline pass")
+	var outline_material := ready_quad.material_override as ShaderMaterial
+	require(outline_material != null and not String(outline_material.shader.code).contains("depth_test_disabled"), "pickup outline stays depth tested so soil still hides it")
+	require(game.pickup_outline.mask_cull_mask() == (1 << (Main.PickupOutline.LAYER - 1)), "outline mask renders only the collectible layer")
 	await shot("ready", focus)
 	# Keep another stored item to catch both the per-frame back attachment and
 	# the old behaviour which showed the previous item when dropping one.
@@ -133,8 +140,8 @@ func run() -> void:
 	game.pick_up_cluster()
 	var target_id := target.get_instance_id()
 	var record: Dictionary = game.inventory.get_item(target_id)
-	require(target.collected and not target.visible and not outline(target).visible, "F collection hides both object and outline")
-	require(game.inventory.items.size() == 2 and record.wear == 37 and record.base_value == 760, "collection stores wear and price without removing the other item")
+	require(target.collected and not target.visible and not target.wants_outline(), "F collection hides both object and outline")
+	require(game.inventory.items.size() == 2 and record.base_value == 760, "collection stores the catalogue price without removing the other item")
 	require(target._model.get_parent() == target and target._model.transform == model_before, "collection does not attach or transform the model onto the character")
 	assert_unregistered(old_cells)
 	for frame in range(30):
@@ -150,10 +157,10 @@ func run() -> void:
 		game.drop_inventory_item(target_id)
 		if not target.collected:
 			break
-	require(not target.collected and target.is_visible_in_tree() and outline(target).is_visible_in_tree(), "safe static drop restores object and pickup outline")
-	require(game.inventory.get_item(target_id).is_empty() and game.inventory.items.size() == 1 and game.inventory.get_item(other.get_instance_id()).wear == 20, "drop removes only its own inventory record")
+	require(not target.collected and target.is_visible_in_tree() and target.wants_outline(), "safe static drop restores object and pickup outline")
+	require(game.inventory.get_item(target_id).is_empty() and game.inventory.items.size() == 1 and not game.inventory.get_item(other.get_instance_id()).is_empty(), "drop removes only its own inventory record")
 	require(not other.is_visible_in_tree(), "dropping one item never shows another stored item on the character")
-	require(target.wear_percent == 37 and target.base_value == 760 and target.footprint == Vector2i(2, 2), "drop restores snapshotted condition and preserves size and base price")
+	require(target.wear_percent == 0 and target.base_value == 760 and target.footprint == Vector2i(2, 2), "drop preserves size and base price")
 	var dropped_cells := target.get_world_cells()
 	for cell in dropped_cells:
 		require(game.terrain.crystal_owner_at(cell) == target_id and not game.terrain.is_soil_cell(cell), "static dropped specimen reclaims its voxel cells without soil overlap")
@@ -165,16 +172,14 @@ func run() -> void:
 	await shot("dropped", target.position + target.get_local_bounds().get_center())
 	approach(target)
 	game.pick_up_cluster()
-	require(target.collected and not target.is_visible_in_tree() and not outline(target).visible, "dropped item can be collected and hidden again")
+	require(target.collected and not target.is_visible_in_tree() and not target.wants_outline(), "dropped item can be collected and hidden again")
 	assert_unregistered(dropped_cells)
 	var repacked: Dictionary = game.inventory.get_item(target_id)
-	require(game.inventory.items.size() == 2 and repacked.wear == record.wear and repacked.base_value == record.base_value, "repick restores the same independent item values without duplication")
-	game.appraisal.known = true
-	game.appraisal.wear_percent = repacked.wear
+	require(game.inventory.items.size() == 2 and repacked.base_value == record.base_value, "repick restores the same independent item value without duplication")
 	game.appraisal.base_value = repacked.base_value
-	require(game.appraisal.sale_value() == 479, "37 percent wear on the large crystal still quotes 479")
+	require(game.appraisal.sale_value() == 760, "the large crystal quotes its catalogue value")
 	game.queue_free()
 	await process_frame
 	if not failed:
-		print("PICKUP_OUTLINE_OK buried_off/ready_on stored_hidden=true no_back_attachment=true static_drop=true reclaims_grid=true repick=true value=479 preview=%s" % preview)
+		print("PICKUP_OUTLINE_OK buried_off/ready_on stored_hidden=true no_back_attachment=true static_drop=true reclaims_grid=true repick=true value=760 preview=%s" % preview)
 	quit(1 if failed else 0)

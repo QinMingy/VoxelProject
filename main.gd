@@ -4,13 +4,14 @@ class MiningRing extends Control:
 	var fraction := 0.0
 
 	func _draw() -> void:
-		draw_arc(Vector2.ZERO, 21, 0, TAU, 48, Color("#283b51"), 5, true)
+		draw_arc(Vector2.ZERO, 21, 0, TAU, 48, Palette.DEEP_SLATE, 5, true)
 		if fraction > 0:
-			draw_arc(Vector2.ZERO, 21, -PI / 2, -PI / 2 + TAU * fraction, 48, Color("#6df1d9"), 5, true)
+			draw_arc(Vector2.ZERO, 21, -PI / 2, -PI / 2 + TAU * fraction, 48, Palette.CYAN, 5, true)
 
 const Terrain = preload("res://terrain.gd")
 const Suit = preload("res://suit.gd")
 const Crystal = preload("res://crystal.gd")
+const PickupOutline = preload("res://pickup_outline.gd")
 const AdventureItems = preload("res://adventure_items.gd")
 const Appraisal = preload("res://appraisal.gd")
 const Inventory = preload("res://inventory.gd")
@@ -21,6 +22,7 @@ const BasePanel = preload("res://base_panel.gd")
 const OutpostPanel = preload("res://outpost_panel.gd")
 const SkillTreePanel = preload("res://skill_tree_panel.gd")
 const MuseumPanel = preload("res://museum_panel.gd")
+const SettlementPanel = preload("res://settlement_panel.gd")
 const Detector = preload("res://detector.gd")
 const DetectorPanel = preload("res://detector_panel.gd")
 const ActivityBoundary = preload("res://activity_boundary.gd")
@@ -29,6 +31,7 @@ const UI = preload("res://ui_style.gd")
 const FirstPersonRig = preload("res://first_person_rig.gd")
 const TouchControls = preload("res://touch_controls.gd")
 const GameAudio = preload("res://game_audio.gd")
+const Palette = preload("res://palette.gd")
 const LANDER := Vector3(-5.7, 0.0, 4.9)
 const CRYSTAL_COUNT := 72
 const CRYSTAL_SCALE := 0.44
@@ -40,6 +43,11 @@ const WALK_SPEED := 3.35
 const HATCH_REACH := 2.05
 const EYE_HEIGHT := 1.04
 const OXYGEN_PER_GRAIN := 0.02
+const PICKUP_REACH := 1.85
+const SCAN_RADIUS := 6.0
+const MIN_SPACING := 2.8
+const FOG_BEGIN := 10.0
+const FOG_END := 28.0
 const BRUSH_NAMES := ["球形", "平铲", "钻头"]
 
 var terrain: Terrain
@@ -62,6 +70,8 @@ var base_panel: BasePanel
 var outpost_panel: OutpostPanel
 var skill_tree_panel: SkillTreePanel
 var museum_panel: MuseumPanel
+var settlement_panel: SettlementPanel
+var pending_settlement: Dictionary = {}
 var outpost_page := ""
 var _outpost_transition := false
 var _gm_return_page := ""
@@ -81,19 +91,13 @@ var trip_id := 0
 var trip_elapsed := 0.0
 var resume_mouse_capture := true
 var pending_pickup: Crystal
-# Compatibility view for existing smoke checks; inventory owns the actual snapshots.
-var packed_specimens: Array[int]:
-	get:
-		var conditions: Array[int] = []
-		for item in inventory.items:
-			conditions.append(item.wear)
-		return conditions
 var nearest_signal: Crystal
 var crystal_scan_time := 0.0
 var map_random := RandomNumberGenerator.new()
 var adventure_trial := false
 var wants_mouse_capture := true
 var touch_mode := OS.has_feature("mobile")
+var _touch_paused_before_edit := false
 var touch_controls: TouchControls
 var sfx: GameAudio
 var input_focused := true
@@ -104,11 +108,9 @@ var delivered_clusters := 0
 var appraisal := Appraisal.new()
 var cluster_seen := false
 var cluster_inspected := false
-var specimen_title: Label
-var specimen_info: Label
-var specimen_card: PanelContainer
 var receipt := ""
 var camera: Camera3D
+var pickup_outline: PickupOutline
 var first_person := false
 var first_person_rig: FirstPersonRig
 var drill_target := Vector3.ZERO
@@ -125,7 +127,6 @@ var notice_card: PanelContainer
 var debug_label: Label
 var help_card: PanelContainer
 var help_text: Label
-var exposure_bar: ProgressBar
 var show_help := false
 var last_hud_message := ""
 var notice_until := 0
@@ -148,9 +149,6 @@ var bank: int:
 	set(value):
 		if progression != null:
 			progression.bank = maxi(value, 0)
-var upgrades: int:
-	get:
-		return int(progression.levels.get("drill", 0)) if progression != null else 0
 var on_moon := false
 var was_interact := false
 var was_pickup := false
@@ -187,30 +185,29 @@ func _ready() -> void:
 	receipt = str(progression.last_report.get("text", ""))
 	apply_progression()
 	appraisal.load_catalogue()
-	_sync_museum_catalogue()
 	var world := WorldEnvironment.new()
 	world_environment = world
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color("#283143")
+	env.background_color = Palette.DEEP_SLATE
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color("#a5b7dc")
+	env.ambient_light_color = Palette.PALE_STONE
 	env.ambient_light_energy = 0.7
 	# Depth fog is cheap in the Compatibility renderer and leaves nearby ore clear.
 	env.fog_enabled = true
 	env.fog_mode = Environment.FOG_MODE_DEPTH
-	env.fog_light_color = Color("#283143")
+	env.fog_light_color = Palette.DEEP_SLATE
 	env.fog_light_energy = 1.0
 	env.fog_sun_scatter = 0.0
 	env.fog_density = 1.0
-	env.fog_depth_begin = 10.0
-	env.fog_depth_end = 28.0
+	env.fog_depth_begin = FOG_BEGIN
+	env.fog_depth_end = FOG_END
 	env.fog_depth_curve = 0.85
 	world.environment = env
 	add_child(world)
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-58, -33, 0)
-	sun.light_color = Color("#fff0d5")
+	sun.light_color = Palette.CREAM
 	sun.light_energy = 1.45
 	sun.shadow_enabled = true
 	add_child(sun)
@@ -231,6 +228,10 @@ func _ready() -> void:
 	camera.far = 90.0
 	add_child(camera)
 	camera.current = true
+	pickup_outline = PickupOutline.new()
+	pickup_outline.name = "PickupOutline"
+	add_child(pickup_outline)
+	pickup_outline.bind(camera, crystals)
 	first_person_rig = FirstPersonRig.new()
 	camera.add_child(first_person_rig)
 	first_person_rig.hide()
@@ -242,12 +243,12 @@ func _ready() -> void:
 		if not auto_open_base:
 			call_deferred("capture_mouse")
 	grain.size = Vector3.ONE * 0.055
-	dust.albedo_color = Color("#858ba0")
-	ore.albedo_color = Color("#58e8db")
+	dust.albedo_color = Palette.DUST
+	ore.albedo_color = Palette.CYAN
 	ore.emission_enabled = true
-	ore.emission = Color("#48b9ac")
+	ore.emission = Palette.TEAL
 	ore.emission_energy_multiplier = 0.6
-	pickup_material.albedo_color = Color("#8dfff0")
+	pickup_material.albedo_color = Palette.CYAN_LIGHT
 	pickup_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	cursor = MeshInstance3D.new()
 	var torus := TorusMesh.new()
@@ -263,6 +264,9 @@ func _ready() -> void:
 	add_child(touch_controls)
 	touch_controls.look_changed.connect(_on_touch_look)
 	touch_controls.action_pressed.connect(_on_touch_action)
+	touch_controls.edit_mode_changed.connect(_on_touch_edit_mode)
+	touch_controls.layout_saved.connect(_on_touch_layout_saved)
+	touch_controls.apply_layout(progression.touch_layout)
 	inventory_panel = InventoryPanel.new()
 	add_child(inventory_panel)
 	inventory_panel.set_catalogue_query(appraisal.is_known)
@@ -299,13 +303,15 @@ func _ready() -> void:
 	skill_tree_panel.feedback.connect(_sound)
 	museum_panel = MuseumPanel.new()
 	add_child(museum_panel)
-	museum_panel.opened.connect(_on_base_opened)
 	museum_panel.closed.connect(_on_base_closed)
-	museum_panel.donate_requested.connect(on_museum_donate)
-	museum_panel.sell_requested.connect(on_museum_sell)
+	museum_panel.stand_selected.connect(_on_museum_stand_selected)
+	museum_panel.zone_selected.connect(_on_museum_zone_selected)
+	museum_panel.item_selected.connect(_on_museum_item_selected)
 	museum_panel.place_requested.connect(on_museum_place)
 	museum_panel.research_requested.connect(open_museum_research)
 	museum_panel.feedback.connect(_sound)
+	settlement_panel = SettlementPanel.new()
+	add_child(settlement_panel)
 	outpost_panel = OutpostPanel.new()
 	add_child(outpost_panel)
 	outpost_panel.opened.connect(_on_base_opened)
@@ -371,21 +377,21 @@ func build_lander() -> void:
 	hull.bottom_radius = 0.85
 	hull.height = 1.15
 	hull.radial_segments = 8
-	part(hull, LANDER + Vector3.UP * 1.0, Color("#d2d9e5"))
+	part(hull, LANDER + Vector3.UP * 1.0, Palette.BONE)
 	var beacon := SphereMesh.new()
 	beacon.radius = 0.2
 	beacon.height = 0.4
-	part(beacon, LANDER + Vector3.UP * 1.72, Color("#47d4b8"))
+	part(beacon, LANDER + Vector3.UP * 1.72, Palette.CYAN)
 	for x in [-0.78, 0.78]:
 		for z in [-0.65, 0.65]:
 			var foot := BoxMesh.new()
 			foot.size = Vector3(0.29, 0.46, 0.29)
-			part(foot, LANDER + Vector3(x, 0.24, z), Color("#72829b"))
+			part(foot, LANDER + Vector3(x, 0.24, z), Palette.MOON_BLUE)
 	var pad := CylinderMesh.new()
 	pad.height = 0.065
 	pad.top_radius = 1.32
 	pad.bottom_radius = 1.32
-	part(pad, LANDER + Vector3.UP * 0.04, Color("#46596d"))
+	part(pad, LANDER + Vector3.UP * 0.04, Palette.SLATE)
 
 func part(mesh: Mesh, at: Vector3, color: Color) -> void:
 	var node := MeshInstance3D.new()
@@ -451,7 +457,7 @@ func build_hud() -> void:
 	keys.offset_left = 24
 	keys.offset_top = -64
 	keys.offset_bottom = -24
-	keys.add_theme_stylebox_override("panel", UI.panel(UI.PANEL, UI.BORDER, 8, 8))
+	keys.add_theme_stylebox_override("panel", UI.panel(UI.PANEL, UI.BORDER, 8, 2))
 	keys.add_child(hint)
 	keys.hide()
 	help_card = hud_panel(surface, "KeyHelp")
@@ -504,24 +510,6 @@ func build_hud() -> void:
 	pickup_label.add_theme_color_override("font_outline_color", UI.PANEL)
 	pickup_label.hide()
 	surface.add_child(pickup_label)
-	var card := hud_panel(surface, "SpecimenCard")
-	specimen_card = card
-	card.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	card.offset_left = -344
-	card.offset_right = -24
-	card.offset_top = 24 + DetectorPanel.HEIGHT + 16
-	var details := VBoxContainer.new()
-	details.add_theme_constant_override("separation", 8)
-	details.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	card.add_child(details)
-	specimen_title = hud_label("", 26)
-	details.add_child(specimen_title)
-	exposure_bar = hud_bar()
-	details.add_child(exposure_bar)
-	specimen_info = hud_label("", 22)
-	specimen_info.custom_minimum_size.x = 280
-	specimen_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	details.add_child(specimen_info)
 	detector_panel.set_display_mode(radar_mode)
 	_layout_detector_hud()
 
@@ -530,7 +518,6 @@ func _layout_detector_hud() -> void:
 	oxygen_card.position.y = 144.0 if compass else 24.0
 	help_card.position.y = 364.0 if compass else 244.0
 	debug_label.position.y = 364.0 if compass else 244.0
-	specimen_card.offset_top = 144.0 if compass else 24.0 + DetectorPanel.CIRCLE_HEIGHT + 16.0
 	boundary_warning.offset_top = 144.0 if compass else 24.0
 	boundary_warning.offset_bottom = boundary_warning.offset_top + 40.0
 
@@ -561,8 +548,8 @@ func hud_bar() -> ProgressBar:
 	bar.show_percentage = false
 	bar.custom_minimum_size.y = 8
 	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	bar.add_theme_stylebox_override("background", UI.panel(Color("#293c4a"), Color.TRANSPARENT, 0, 4))
-	bar.add_theme_stylebox_override("fill", UI.panel(UI.ACCENT, Color.TRANSPARENT, 0, 4))
+	bar.add_theme_stylebox_override("background", UI.panel(Palette.DEEP_SLATE, Color.TRANSPARENT, 0, 2))
+	bar.add_theme_stylebox_override("fill", UI.panel(UI.ACCENT, Color.TRANSPARENT, 0, 2))
 	return bar
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -671,6 +658,20 @@ func _on_touch_look(delta: Vector2) -> void:
 		return
 	view_yaw -= delta.x * 0.003
 	view_pitch = clampf(view_pitch + delta.y * 0.003, -1.45 if first_person else -0.50, 1.45 if first_person else 1.14)
+
+func _on_touch_edit_mode(active: bool) -> void:
+	if active:
+		_touch_paused_before_edit = get_tree().paused
+		get_tree().paused = true
+		hud_surface.visible = false
+	else:
+		get_tree().paused = _touch_paused_before_edit
+		update_hud()
+
+func _on_touch_layout_saved(layout: Dictionary) -> void:
+	var result := progression.set_touch_layout(layout)
+	if not bool(result.get("ok", false)):
+		message = str(result.get("message", "按键布局保存失败"))
 
 func _on_touch_action(action: String) -> void:
 	if not touch_mode or not input_focused or inventory_open or gm_open or base_open:
@@ -809,7 +810,7 @@ func _physics_process(delta: float) -> void:
 		cursor.scale = Vector3.ONE * terrain.brush_radius(brush)
 	var facing := target - suit.position if can_mine else -down
 	suit.rotation.y = atan2(-facing.x, -facing.z)
-	reticle.modulate = Color("#6df1d9") if can_mine else Color("#f4f6ff")
+	reticle.modulate = Palette.CYAN if can_mine else Palette.CREAM
 	suit.animate(delta, movement.length_squared() > 0.01, drilling, not locomotion.grounded)
 	first_person_rig.animate(delta, movement.length_squared() > 0.01 and locomotion.grounded, drilling)
 	if on_moon:
@@ -975,7 +976,7 @@ func spawn_crystals(seed_value: int = -1) -> void:
 			if clearance > best_clearance:
 				best_clearance = clearance
 				best_site = site
-			if clearance >= 2.8:
+			if clearance >= MIN_SPACING:
 				break
 		site = best_site
 		if adventure_trial:
@@ -1022,9 +1023,6 @@ func spawn_crystals(seed_value: int = -1) -> void:
 			remove_child(item)
 			item.queue_free()
 			continue
-		var wear_range: Array = zone.get("wear_range", [0, Appraisal.MAX_WEAR])
-		item.wear_percent = map_random.randi_range(int(wear_range[0]), int(wear_range[1]))
-		item.set_wear(float(item.wear_percent) / 100.0)
 		item.is_exposed(terrain)
 		item.set_markers_visible(false)
 		item.visible = false
@@ -1039,9 +1037,9 @@ func update_crystal_targets() -> void:
 			continue
 		var distance_squared := suit.position.distance_squared_to(item.position)
 		# Coarse distant surfaces must never accidentally reveal a buried specimen.
-		item.visible = on_moon and item.discovered and distance_squared < 36.0 * 36.0
+		item.visible = on_moon and item.discovered and distance_squared < Crystal.VIEW_DISTANCE * Crystal.VIEW_DISTANCE
 		item.set_markers_visible(false)
-		if distance_squared > 6.0 * 6.0:
+		if distance_squared > SCAN_RADIUS * SCAN_RADIUS:
 			continue
 		var was_discovered := item.discovered
 		var was_loose := item.is_loose()
@@ -1063,7 +1061,6 @@ func update_crystal_targets() -> void:
 	cluster_seen = crystal != null
 	cluster_inspected = crystal != null and crystal.inspected
 	if crystal != null:
-		appraisal.wear_percent = crystal.wear_percent
 		appraisal.base_value = crystal.base_value
 		crystal.set_markers_visible(true)
 	var had_signal := bool(detector_reading.get("available", false))
@@ -1079,7 +1076,7 @@ func pick_up_cluster() -> void:
 	if not on_moon or crystal == null or crystal.collected or not crystal.is_loose():
 		_sound("error")
 		return
-	if suit.position.distance_to(crystal.position) > 1.85:
+	if suit.position.distance_to(crystal.position) > PICKUP_REACH:
 		return
 	if not collect_crystal(crystal):
 		_sound("error")
@@ -1090,10 +1087,10 @@ func specimen_data(item: Crystal) -> Dictionary:
 	return {"id": item.get_instance_id(), "world_id": item.get_instance_id(),
 		"label": item.size_label, "footprint": item.footprint,
 		"item_type": item.item_type, "item_name": item.item_name, "icon_color": item.icon_color,
-		"wear": item.wear_percent, "base_value": item.base_value}
+		"base_value": item.base_value}
 
 func collect_crystal(item: Crystal) -> bool:
-	if not on_moon or item == null or item.collected or not item.is_loose() or suit.position.distance_to(item.position) > 1.85:
+	if not on_moon or item == null or item.collected or not item.is_loose() or suit.position.distance_to(item.position) > PICKUP_REACH:
 		return false
 	if not inventory.try_add(specimen_data(item)):
 		return false
@@ -1103,7 +1100,7 @@ func collect_crystal(item: Crystal) -> bool:
 	cluster_inspected = true
 	item.store_in_inventory()
 	_sound("crystal_pickup")
-	message = "已装入 %s · 共 %d 件，可继续寻找或回舱入库" % [item.item_name, packed_specimens.size()]
+	message = "已装入 %s · 共 %d 件，可继续寻找或回舱入库" % [item.item_name, inventory.items.size()]
 	update_crystal_targets()
 	return true
 
@@ -1305,21 +1302,32 @@ func open_base() -> void:
 func show_outpost(page: String) -> void:
 	if on_moon or inventory_open or gm_open or page not in ["title", "lobby", "zones", "skills", "report", "museum"]:
 		return
+	if page == "report":
+		var settlement: Variant = progression.last_report.get("settlement", {})
+		if settlement is Dictionary and not settlement.is_empty():
+			if is_instance_valid(settlement_panel):
+				settlement_panel.open(settlement.duplicate(true))
+			return
 	if base_open and outpost_page == page:
 		return
 	_outpost_transition = true
+	var keep_exhibition := outpost_panel.is_open and outpost_page in ["lobby", "museum"] and page in ["lobby", "museum"]
 	base_panel.close()
 	skill_tree_panel.close()
 	museum_panel.close()
-	outpost_panel.close()
+	if not keep_exhibition:
+		outpost_panel.close()
 	outpost_page = page
 	sync_base_state()
+	if page != "museum":
+		outpost_panel.lobby.scene.set_selected_stand(-1)
 	match page:
 		"zones": base_panel.open()
 		"skills":
 			skill_tree_panel.set_tab("equipment")
 			skill_tree_panel.open()
 		"museum":
+			outpost_panel.open("museum")
 			museum_panel.show_warehouse()
 			museum_panel.open()
 		_: outpost_panel.open(page)
@@ -1342,6 +1350,15 @@ func _on_base_opened() -> void:
 	boundary_warning.hide()
 	sync_base_state()
 	get_tree().paused = true
+	if outpost_page == "lobby":
+		_flush_pending_settlement()
+
+func _flush_pending_settlement() -> void:
+	if pending_settlement.is_empty() or not is_instance_valid(settlement_panel):
+		return
+	var data := pending_settlement.duplicate(true)
+	pending_settlement = {}
+	settlement_panel.open(data)
 
 func _on_base_closed() -> void:
 	if _outpost_transition:
@@ -1361,10 +1378,10 @@ func open_museum_research() -> void:
 	skill_tree_panel.set_tab("museum")
 
 func open_lobby_stand(slot: int) -> void:
-	if not base_open or outpost_page != "lobby" or on_moon:
+	if not base_open or outpost_page not in ["lobby", "museum"] or on_moon:
 		return
-	var capacity := int(progression.museum_summary().get("capacity", 3))
-	if slot < 0 or slot >= 6:
+	var capacity := int(progression.museum_summary().get("capacity", 6))
+	if slot < 0 or slot >= Progression.Museum.STAND_COUNT:
 		return
 	if slot >= capacity:
 		open_museum_research()
@@ -1372,7 +1389,22 @@ func open_lobby_stand(slot: int) -> void:
 	show_outpost("museum")
 	museum_panel.inspect_stand(slot)
 
+func _on_museum_stand_selected(slot: int) -> void:
+	if outpost_panel != null and museum_panel.is_open and outpost_page == "museum":
+		outpost_panel.lobby.scene.set_selected_stand(slot)
+
+func _on_museum_zone_selected(zone: int) -> void:
+	if outpost_panel != null and museum_panel.is_open and outpost_page == "museum":
+		outpost_panel.lobby.scene.set_zone(zone)
+
+func _on_museum_item_selected(key: String) -> void:
+	if outpost_panel != null and museum_panel.is_open and outpost_page == "museum":
+		outpost_panel.lobby.scene.set_preview_item(key)
+
 func _close_outpost_for_departure(restore_pointer: bool = true) -> void:
+	pending_settlement = {}
+	if is_instance_valid(settlement_panel):
+		settlement_panel.close()
 	_outpost_transition = true
 	base_panel.close()
 	skill_tree_panel.close()
@@ -1398,11 +1430,6 @@ func sync_base_state() -> void:
 	if base_panel == null:
 		return
 	var museum_summary := progression.museum_summary()
-	# Legacy catalogue knowledge is still valid. Merge it for presentation without
-	# rewriting a migrated profile merely because the player opened a menu.
-	for kind: String in ["crystal", "chest", "shield", "hammer"]:
-		if appraisal.is_known(kind) and kind not in museum_summary.identified_types:
-			museum_summary.identified_types.append(kind)
 	var state := {"bank": bank, "research_points": progression.research_points, "museum": museum_summary, "upgrades": progression.upgrade_rows(),
 		"zones": progression.zones(), "selected_zone": progression.selected_zone,
 		"stats": progression.stats(), "receipt": receipt, "report": progression.last_report, "touch_mode": touch_mode,
@@ -1415,41 +1442,14 @@ func sync_base_state() -> void:
 	if museum_panel != null:
 		museum_panel.sync_state(state)
 
-func _sync_museum_catalogue() -> void:
-	if progression == null or appraisal == null:
-		return
-	var changed := false
-	for kind: String in progression.museum_summary().get("identified_types", []):
-		if not appraisal.is_known(kind):
-			appraisal.record_item_sale(kind, 0, false)
-			changed = true
-	if changed:
-		appraisal.save_catalogue()
-
 func _finish_museum_action(result: Dictionary) -> void:
 	message = str(result.get("message", "操作未完成"))
 	if bool(result.get("ok", false)):
-		# Keep the legacy appraisal cache's last-sale detail. The profile remains
-		# the owner of the atomic sale and identification, even if this cache fails.
-		if result.has("item") and result.has("income"):
-			var record: Dictionary = result.item
-			var cache_error := appraisal.record_item_sale(str(record.get("item_type", "crystal")), int(result.income))
-			if cache_error != OK:
-				message += " · 资金已保存，鉴定缓存稍后恢复"
-		_sync_museum_catalogue()
 		_sound("purchase")
 	else:
 		_sound("error")
 	sync_base_state()
 	update_hud()
-
-func on_museum_donate(uid: int) -> void:
-	if not on_moon:
-		_finish_museum_action(progression.donate_item(uid))
-
-func on_museum_sell(uid: int) -> void:
-	if not on_moon:
-		_finish_museum_action(progression.sell_item(uid))
 
 func on_museum_place(key: String, slot: int) -> void:
 	if not on_moon:
@@ -1479,13 +1479,9 @@ func select_zone(zone_id: String) -> void:
 	sync_base_state()
 
 func reset_appraisal_catalogue() -> void:
-	var result: Dictionary = progression.reset_identification()
-	if not result.ok:
-		message = str(result.message)
-		return
 	var reset_error := appraisal.reset_catalogue()
 	receipt = ""
-	message = "图鉴已重置，下次出售或入馆重新鉴定" if reset_error == OK else "图鉴已在本次试玩重置，本地保存失败"
+	message = "图鉴已重置" if reset_error == OK else "图鉴已在本次试玩重置，本地保存失败"
 
 func process_soil_cleanup() -> void:
 	var result := terrain.process_fragment_cleanup()
@@ -1509,7 +1505,7 @@ func drop_inventory_item(item_id: int) -> void:
 	ground.x = horizontal.x
 	ground.z = horizontal.y
 	ground.y = terrain.support_height(ground.x, ground.z, suit.position.y + 0.55)
-	item.set_wear(float(record.wear) / 100.0)
+	item.set_wear(0.0)
 	if not item.drop_at(ground):
 		_sound("error")
 		message = "脚边没有容纳整件物品的空位，请换个位置再丢弃"
@@ -1559,6 +1555,8 @@ func settle(emergency: bool) -> void:
 	fragments.clear()
 	receipt = str(result.get("report", {}).get("text", ""))
 	message = str(result.get("message", "已回到前哨站"))
+	var settlement: Variant = result.get("report", {}).get("settlement", {})
+	pending_settlement = settlement.duplicate(true) if settlement is Dictionary else {}
 	var stored_count := int(result.get("stored", 0))
 	delivered_clusters += stored_count
 	carrying_cluster = false
@@ -1620,7 +1618,7 @@ func update_hud() -> void:
 	if on_moon:
 		if suit.position.distance_to(LANDER) < HATCH_REACH:
 			action_label.text = "E  返航入库"
-		elif crystal != null and crystal.is_loose() and suit.position.distance_to(crystal.position) <= 1.85:
+		elif crystal != null and crystal.is_loose() and suit.position.distance_to(crystal.position) <= PICKUP_REACH:
 			action_label.text = "F  拾取 " + crystal.item_name
 		elif cursor.visible:
 			action_label.text = "长按左键  开采"
@@ -1628,6 +1626,12 @@ func update_hud() -> void:
 		action_label.text = "E / M  基地整备"
 	if not touch_mode and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		action_label.text = "点击画面  继续"
+	if touch_controls != null:
+		touch_controls.set_action_available("pickup", on_moon and crystal != null and not crystal.collected
+			and crystal.is_loose() and suit.position.distance_to(crystal.position) <= PICKUP_REACH)
+		touch_controls.set_action_available("interact", not on_moon or suit.position.distance_to(LANDER) < HATCH_REACH)
+		touch_controls.set_action_available("base", not on_moon)
+		touch_controls.set_action_available("backpack", not inventory_open)
 	action_card.visible = not touch_mode and (show_help or Input.mouse_mode != Input.MOUSE_MODE_CAPTURED) and not action_label.text.is_empty() and not inventory_open and not gm_open and not base_open
 	if message != last_hud_message:
 		last_hud_message = message
@@ -1640,29 +1644,6 @@ func update_hud() -> void:
 		debug_label.text = "%d FPS · %.0f MB\n笔刷 %s · %.2f s/次" % [Engine.get_frames_per_second(), Performance.get_monitor(Performance.MEMORY_STATIC) / 1048576.0, BRUSH_NAMES[brush], mining_time]
 		var cleanup_stats := terrain.debug_stats()
 		debug_label.text += "\n清理 %d 格 · %.2f ms" % [int(cleanup_stats.cleanup_removed), float(cleanup_stats.cleanup_last_usec) / 1000.0]
-	update_specimen_card()
-
-func update_specimen_card() -> void:
-	specimen_card.visible = on_moon and crystal != null and not inventory_open and not gm_open and not base_open
-	if not on_moon or crystal == null:
-		specimen_info.text = ""
-		return
-	specimen_title.text = "%s  %d×%d" % [crystal.size_label, crystal.footprint.x, crystal.footprint.y]
-	specimen_title.modulate = UI.ACCENT if crystal.is_loose() else UI.TEXT
-	exposure_bar.value = crystal.exposure_ratio * 100.0
-	if crystal.is_loose():
-		specimen_info.text = "已松动 · 可收集\n"
-	elif crystal.exposure_ratio >= Crystal.RELEASE_EXPOSURE:
-		specimen_info.text = "暴露达标 · 清开顶部\n"
-	else:
-		specimen_info.text = "暴露 %d%% / 80%%\n" % roundi(crystal.exposure_ratio * 100)
-	specimen_info.text += "磨损 %d%%\n" % appraisal.wear_percent if cluster_inspected else "%s\n" % appraisal.condition_name()
-	if not appraisal.is_known(crystal.item_type):
-		specimen_info.text += "售价 ？"
-	elif not cluster_inspected:
-		specimen_info.text += "估价待检查"
-	else:
-		specimen_info.text += "预计售价 %d" % appraisal.sale_value()
 
 func burst(at: Vector3, found: int) -> void:
 	var carriers := mini(found, 8)

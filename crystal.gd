@@ -2,19 +2,21 @@ extends Node3D
 
 const Terrain = preload("res://terrain.gd")
 const VoxelModel = preload("res://voxel_model.gd")
+const PickupOutline = preload("res://pickup_outline.gd")
+const Palette = preload("res://palette.gd")
 const CELL_SIZE := Terrain.CELL_SIZE
 const RELEASE_EXPOSURE := 0.80
+const VIEW_DISTANCE := 36.0
 const LIFT_STEPS := 3
 const DROP_HORIZONTAL_STEPS := 3
 const DROP_UP_STEPS := 8
-const PICKUP_OUTLINE_WIDTH := 0.014
 const GRIP_COUNT := 3 # Compatibility for older prototype callers, not real grip points.
 const STEPS := [Vector3i.UP, Vector3i.DOWN, Vector3i.RIGHT, Vector3i.LEFT, Vector3i.BACK, Vector3i.FORWARD]
 const FACE_CORNERS := [[4, 5, 6, 7], [0, 3, 2, 1], [2, 6, 5, 1], [0, 4, 7, 3], [3, 7, 6, 2], [1, 5, 4, 0]]
 const FOOTPRINTS := [Vector2i(1, 1), Vector2i(1, 2), Vector2i(2, 2)]
 const BASE_VALUES := [180, 400, 760]
 const SIZE_NAMES := ["小型晶石", "中型晶石", "大型晶石"]
-const FACETS := [Color("#a85ce2"), Color("#d9a1fa"), Color("#8c43c5"), Color("#b875ed"), Color("#a860de"), Color("#bc87eb")]
+const FACETS := [Palette.VIOLET, Palette.CRYSTAL_LIGHT, Palette.VIOLET_SHADOW, Palette.CRYSTAL, Palette.VIOLET, Palette.CRYSTAL]
 
 const WEAR_SHADER := """
 shader_type spatial;
@@ -58,7 +60,6 @@ void fragment() {
 
 static var _mesh_cache: Dictionary = {}
 static var _shared_shader: Shader
-static var _outline_material: StandardMaterial3D
 static var _shared_mesh: ArrayMesh # Medium mesh for legacy debug readers.
 
 var wear_percent := 0
@@ -70,7 +71,7 @@ var footprint := Vector2i(1, 2)
 var size_label := "中型晶石"
 var item_type := "crystal"
 var item_name := "中型晶石"
-var icon_color := Color("#b875ed")
+var icon_color := Palette.CRYSTAL
 var source_rotation := Vector3.ZERO
 var voxel_diagnostics: Dictionary = {}
 var base_value := 400
@@ -81,9 +82,9 @@ var grips_remaining := GRIP_COUNT
 
 var _model: Node3D
 var _mesh_instance: MeshInstance3D
-var _outline_instance: MeshInstance3D
 var _geometry: Dictionary
 var _crystal_material := ShaderMaterial.new()
+var _outline_wanted := false
 var _loose := false
 var _carried := false
 var _wear := 0.0
@@ -102,20 +103,8 @@ func _ready() -> void:
 	_mesh_instance = MeshInstance3D.new()
 	_mesh_instance.material_override = _crystal_material
 	_mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_mesh_instance.visibility_range_end = 36.0
+	_mesh_instance.visibility_range_end = VIEW_DISTANCE
 	_model.add_child(_mesh_instance)
-	if _outline_material == null:
-		_outline_material = StandardMaterial3D.new()
-		_outline_material.albedo_color = Color("#68f4cc")
-		_outline_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		_outline_material.cull_mode = BaseMaterial3D.CULL_FRONT
-	_outline_instance = MeshInstance3D.new()
-	_outline_instance.name = "PickupOutline"
-	_outline_instance.material_override = _outline_material
-	_outline_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_outline_instance.visibility_range_end = 36.0
-	_outline_instance.hide()
-	_model.add_child(_outline_instance)
 	_apply_tier(1)
 	set_wear(_wear)
 	reset_site()
@@ -154,7 +143,6 @@ static func _geometry_for(tier: int) -> Dictionary:
 	var cells: Array[Vector3i] = []
 	var centers := PackedVector3Array()
 	var exterior: Array[Vector3i] = []
-	var corner_normals := {}
 	for cell: Vector3i in shape:
 		cells.append(cell)
 		var low := Vector3(cell) * CELL_SIZE
@@ -169,10 +157,6 @@ static func _geometry_for(tier: int) -> Dictionary:
 			exterior.append(adjacent)
 			var corners := [Vector3(low.x, low.y, low.z), Vector3(high.x, low.y, low.z), Vector3(high.x, low.y, high.z), Vector3(low.x, low.y, high.z), Vector3(low.x, high.y, low.z), Vector3(high.x, high.y, low.z), Vector3(high.x, high.y, high.z), Vector3(low.x, high.y, high.z)]
 			var face: Array = FACE_CORNERS[side]
-			for corner_index: int in face:
-				var corner: Vector3 = corners[corner_index]
-				var previous: Vector3 = corner_normals.get(corner, Vector3.ZERO)
-				corner_normals[corner] = previous + normal
 			var color: Color = FACETS[(absi(cell.x * 3 + cell.z * 7 + cell.y * 5) + side) % FACETS.size()]
 			if side == 0:
 				color = color.lightened(0.14)
@@ -183,25 +167,11 @@ static func _geometry_for(tier: int) -> Dictionary:
 				surface.set_normal(normal)
 				surface.add_vertex(vertex)
 	var mesh: ArrayMesh = surface.commit()
-	var outline := _make_outline(mesh, corner_normals)
-	var data := {"mesh": mesh, "outline": outline, "cells": cells, "centers": centers, "exterior": exterior}
+	var data := {"mesh": mesh, "cells": cells, "centers": centers, "exterior": exterior}
 	_mesh_cache[tier] = data
 	if tier == 1:
 		_shared_mesh = mesh
 	return data
-
-static func _make_outline(mesh: ArrayMesh, corner_normals: Dictionary) -> ArrayMesh:
-	var vertices: PackedVector3Array = mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
-	# Move shared corners together so hard voxel normals do not split the shell.
-	for index in range(vertices.size()):
-		var direction: Vector3 = corner_normals[vertices[index]]
-		vertices[index] += direction.normalized() * PICKUP_OUTLINE_WIDTH
-	var arrays := []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = vertices
-	var outline := ArrayMesh.new()
-	outline.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return outline
 
 func _apply_tier(tier: int) -> void:
 	item_type = "crystal"
@@ -212,11 +182,10 @@ func _apply_tier(tier: int) -> void:
 	base_value = BASE_VALUES[size_tier]
 	size_label = SIZE_NAMES[size_tier]
 	item_name = size_label
-	icon_color = Color("#b875ed")
+	icon_color = Palette.CRYSTAL
 	_crystal_material.set_shader_parameter("mineral_glow", 1.0)
 	_geometry = _geometry_for(size_tier)
 	_mesh_instance.mesh = _geometry.mesh
-	_outline_instance.mesh = _geometry.outline
 
 func setup_adventure(scene: PackedScene, definition: Dictionary, orientation: Vector3, surface_y: float, burial_depth: float) -> bool:
 	_release_occupancy()
@@ -226,13 +195,12 @@ func setup_adventure(scene: PackedScene, definition: Dictionary, orientation: Ve
 		return false
 	_geometry = sampled
 	_mesh_instance.mesh = _geometry.mesh
-	_outline_instance.mesh = _geometry.outline
 	item_type = str(definition.id)
 	item_name = str(definition.label)
 	size_label = item_name
 	footprint = definition.get("footprint", Vector2i(2, 2))
 	base_value = int(definition.get("value", 400))
-	icon_color = definition.get("color", Color("#cda36b"))
+	icon_color = definition.get("color", Palette.RUST)
 	_crystal_material.set_shader_parameter("mineral_glow", 0.0)
 	source_rotation = Vector3(posmod(quarter_turns.x, 4), posmod(quarter_turns.y, 4), posmod(quarter_turns.z, 4)) * (PI * 0.5)
 	voxel_diagnostics = sampled.get("diagnostics", {})
@@ -313,7 +281,16 @@ func _reset_site_state() -> void:
 	release_hint = "继续清理物品周围的土"
 	grips_remaining = GRIP_COUNT
 	_model.transform = Transform3D.IDENTITY
-	_outline_instance.hide()
+	_set_outline_wanted(false)
+
+func _set_outline_wanted(enabled: bool) -> void:
+	_outline_wanted = enabled
+	# Only collectibles join the silhouette layer, so buried specimens never
+	# contribute to the mask behind the outline.
+	_mesh_instance.layers = (1 | PickupOutline.LAYER_MASK) if enabled else 1
+
+func wants_outline() -> bool:
+	return _outline_wanted and not collected
 
 func setup_site(surface_y: float, burial_depth: float, size_scale: float = 0.42) -> void:
 	var tier := 0 if size_scale < 0.36 else (1 if size_scale < 0.48 else 2)
@@ -360,7 +337,7 @@ func refresh_exposure(terrain: Node) -> void:
 	extraction_ready = true
 	grips_remaining = 0
 	release_hint = "已松动 · 靠近按 F 取出"
-	_outline_instance.show()
+	_set_outline_wanted(true)
 
 func refresh_grips(terrain: Node) -> int:
 	refresh_exposure(terrain)
@@ -377,7 +354,7 @@ func store_in_inventory() -> void:
 		_release_occupancy()
 		_carried = true
 		collected = true
-	_outline_instance.hide()
+	_set_outline_wanted(false)
 	hide()
 
 func show_carried(_suit: Node3D) -> void:
@@ -429,6 +406,6 @@ func _try_drop(origin: Vector3i) -> bool:
 	exposure_ratio = 1.0
 	grips_remaining = 0
 	release_hint = "已取出 · 靠近按 F 捡回"
-	_outline_instance.show()
+	_set_outline_wanted(true)
 	show()
 	return true

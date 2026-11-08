@@ -7,6 +7,7 @@ signal feedback(event: String)
 
 const Inventory = preload("res://inventory.gd")
 const UI = preload("res://ui_style.gd")
+const Palette = preload("res://palette.gd")
 
 class InventoryGrid extends Control:
 	signal cell_clicked(cell: Vector2i)
@@ -45,21 +46,21 @@ class InventoryGrid extends Control:
 		for y in range(inventory.rows):
 			for x in range(inventory.columns):
 				var rect := Rect2(Vector2(x, y) * cell_size + Vector2(2, 2), Vector2.ONE * (cell_size - 4))
-				draw_style_box(_tile_style(Color("#0a1521"), UI.BORDER, 1), rect)
+				draw_style_box(_tile_style(Palette.INK, UI.BORDER, 1), rect)
 		for item: Dictionary in inventory.items:
 			var size := Inventory.footprint(item, item.rotated)
 			var rect := Rect2(Vector2(item.pos) * cell_size + Vector2(4, 4), Vector2(size) * cell_size - Vector2(8, 8))
 			var selected := int(item.id) == selected_id
-			var color := Color("#264743") if selected else Color("#1a2e3e")
-			var border := UI.ACCENT if selected else Color("#4a6779")
+			var color := Palette.TEAL_SHADOW if selected else Palette.DEEP_SLATE
+			var border := UI.ACCENT if selected else Palette.SLATE
 			var line_width := 3 if selected else 1
 			draw_style_box(_tile_style(color, border, line_width), rect)
 			# The silhouette and price stay readable even in a 64 px one-cell item.
-			# Wear, name and footprint belong to the selected item's detail panel.
+			# Name and footprint belong to the selected item's detail panel.
 			var radius := minf(17.0, rect.size.x * 0.20)
 			var center := rect.position + Vector2(rect.size.x * 0.5, rect.size.y * 0.36)
 			_draw_item_icon(item, center, radius)
-			var price := str(roundi(float(item.get("base_value", 0)) * (100 - int(item.get("wear", 0))) / 100.0)) if _item_known(item) else "?"
+			var price := str(int(item.get("base_value", 0))) if _item_known(item) else "?"
 			draw_string(font, rect.position + Vector2(3, rect.size.y - 7), price, HORIZONTAL_ALIGNMENT_CENTER, rect.size.x - 6, 20, UI.TEXT)
 		if selected_id >= 0 and hover_cell.x >= 0 and hover_cell.y >= 0:
 			var selected: Dictionary = inventory.get_item(selected_id)
@@ -68,7 +69,7 @@ class InventoryGrid extends Control:
 				var tint := Color(0.38, 0.94, 0.68, 0.22) if valid else Color(1.0, 0.30, 0.32, 0.25)
 				var rect := Rect2(Vector2(hover_cell) * cell_size + Vector2(2, 2), Vector2(Inventory.footprint(selected, preview_rotated)) * cell_size - Vector2(4, 4))
 				draw_rect(rect, tint)
-				draw_rect(rect, Color("#80f2b9") if valid else Color("#ff7483"), false, 3.0)
+				draw_rect(rect, Palette.CYAN if valid else Palette.SKIN_SHADOW, false, 3.0)
 
 	func _item_known(item: Dictionary) -> bool:
 		var type_id := str(item.get("item_type", "crystal"))
@@ -79,13 +80,13 @@ class InventoryGrid extends Control:
 
 	func _draw_item_icon(item: Dictionary, center: Vector2, radius: float) -> void:
 		var type_id := str(item.get("item_type", "crystal"))
-		var fallback := Color("#8cabc5")
+		var fallback := Palette.PALE_STONE
 		match type_id:
-			"chest": fallback = Color("#d4a254")
-			"shield": fallback = Color("#719de0")
-			"hammer": fallback = Color("#a9b8c6")
-			"book": fallback = Color("#cd7b75")
-			"potion": fallback = Color("#c485d9")
+			"chest": fallback = Palette.AMBER
+			"shield": fallback = Palette.MOON_BLUE
+			"hammer": fallback = Palette.PALE_STONE
+			"book": fallback = Palette.SKIN_SHADOW
+			"potion": fallback = Palette.CRYSTAL
 		var supplied: Variant = item.get("icon_color", fallback)
 		var color: Color = supplied if supplied is Color else Color.from_string(str(supplied), fallback)
 		var highlight := color.lightened(0.4)
@@ -94,25 +95,25 @@ class InventoryGrid extends Control:
 				draw_rect(Rect2(center + Vector2(-radius, -radius * 0.45), Vector2(radius * 2, radius * 1.25)), color)
 				var lid := PackedVector2Array([center + Vector2(-radius, -radius * 0.45), center + Vector2(-radius * 0.8, -radius * 0.9), center + Vector2(radius * 0.8, -radius * 0.9), center + Vector2(radius, -radius * 0.45)])
 				draw_colored_polygon(lid, color.lightened(0.2))
-				draw_line(center + Vector2(-radius, -radius * 0.25), center + Vector2(radius, -radius * 0.25), Color("#65502d"), 2.0, true)
-				draw_rect(Rect2(center + Vector2(-radius * 0.16, -radius * 0.4), Vector2(radius * 0.32, radius * 0.65)), Color("#ffe4a0"))
+				draw_line(center + Vector2(-radius, -radius * 0.25), center + Vector2(radius, -radius * 0.25), Palette.RUST_SHADOW, 2.0, true)
+				draw_rect(Rect2(center + Vector2(-radius * 0.16, -radius * 0.4), Vector2(radius * 0.32, radius * 0.65)), Palette.AMBER_LIGHT)
 			"shield":
 				var shield := PackedVector2Array([center + Vector2(-radius * 0.8, -radius * 0.85), center + Vector2(radius * 0.8, -radius * 0.85), center + Vector2(radius * 0.7, radius * 0.2), center + Vector2(0, radius), center + Vector2(-radius * 0.7, radius * 0.2)])
 				draw_colored_polygon(shield, color)
 				draw_line(center + Vector2(0, -radius * 0.6), center + Vector2(0, radius * 0.55), highlight, 3.0, true)
 				draw_line(center + Vector2(-radius * 0.45, -radius * 0.1), center + Vector2(radius * 0.45, -radius * 0.1), highlight, 3.0, true)
 			"hammer":
-				draw_line(center + Vector2(0, -radius * 0.45), center + Vector2(0, radius * 0.9), Color("#b47a4b"), radius * 0.35, true)
+				draw_line(center + Vector2(0, -radius * 0.45), center + Vector2(0, radius * 0.9), Palette.RUST, radius * 0.35, true)
 				draw_rect(Rect2(center + Vector2(-radius, -radius * 0.85), Vector2(radius * 2, radius * 0.85)), color)
 				draw_line(center + Vector2(-radius * 0.7, -radius * 0.65), center + Vector2(radius * 0.7, -radius * 0.65), highlight, 2.0, true)
 			"book":
 				draw_rect(Rect2(center + Vector2(-radius * 0.8, -radius), Vector2(radius * 1.6, radius * 2)), color)
-				draw_rect(Rect2(center + Vector2(-radius * 0.65, radius * 0.55), Vector2(radius * 1.25, radius * 0.25)), Color("#e4d7bf"))
+				draw_rect(Rect2(center + Vector2(-radius * 0.65, radius * 0.55), Vector2(radius * 1.25, radius * 0.25)), Palette.BONE)
 				draw_line(center + Vector2(-radius * 0.4, -radius * 0.85), center + Vector2(-radius * 0.4, radius * 0.45), highlight, 2.0, true)
 			"potion":
 				draw_circle(center + Vector2(0, radius * 0.2), radius * 0.8, color)
 				draw_rect(Rect2(center + Vector2(-radius * 0.28, -radius * 0.8), Vector2(radius * 0.56, radius * 0.7)), color.lightened(0.2))
-				draw_rect(Rect2(center + Vector2(-radius * 0.38, -radius), Vector2(radius * 0.76, radius * 0.25)), Color("#cda77b"))
+				draw_rect(Rect2(center + Vector2(-radius * 0.38, -radius), Vector2(radius * 0.76, radius * 0.25)), Palette.RUST)
 				draw_circle(center + Vector2(-radius * 0.25, radius * 0.05), radius * 0.17, highlight)
 			_:
 				var gem := PackedVector2Array([center + Vector2(0, -radius), center + Vector2(radius * 0.72, -radius * 0.15), center + Vector2(radius * 0.52, radius * 0.65), center + Vector2(0, radius), center + Vector2(-radius * 0.72, radius * 0.15), center + Vector2(-radius * 0.52, -radius * 0.65)])
@@ -124,7 +125,8 @@ class InventoryGrid extends Control:
 		style.bg_color = fill
 		style.border_color = border
 		style.set_border_width_all(line_width)
-		style.set_corner_radius_all(7)
+		style.set_corner_radius_all(2)
+		style.corner_detail = 2
 		return style
 
 var is_open := false
@@ -293,12 +295,12 @@ func refresh(is_known: bool) -> void:
 		_details.text = "点选物品查看详情"
 	else:
 		var size := Inventory.footprint(selected, preview_rotated)
-		_details.text = "%s\n磨损 %d%%\n%s\n占格 %d × %d" % [_item_name(selected), int(selected.get("wear", 0)), _price_text(selected), size.x, size.y]
+		_details.text = "%s\n%s\n占格 %d × %d" % [_item_name(selected), _price_text(selected), size.x, size.y]
 	_pending_button.visible = not pending_item.is_empty()
 	_pending_info.visible = not pending_item.is_empty()
 	if not pending_item.is_empty():
 		var size: Vector2i = pending_item.get("footprint", Vector2i.ONE)
-		_pending_info.text = "待拾取 · %s\n%d × %d 格  ·  磨损 %d%%\n%s" % [_item_name(pending_item), size.x, size.y, int(pending_item.get("wear", 0)), _price_text(pending_item)]
+		_pending_info.text = "待拾取 · %s\n%d × %d 格\n%s" % [_item_name(pending_item), size.x, size.y, _price_text(pending_item)]
 
 func set_catalogue_query(query: Callable) -> void:
 	catalogue_query = query
@@ -309,10 +311,7 @@ func _item_name(item: Dictionary) -> String:
 	return str(item.get("item_name", item.get("label", "晶石" if str(item.get("item_type", "crystal")) == "crystal" else "物品")))
 
 func _item_known(item: Dictionary) -> bool:
-	var type_id := str(item.get("item_type", "crystal"))
-	if catalogue_query.is_valid():
-		return bool(catalogue_query.call(type_id))
-	return known and type_id in ["crystal", "moon_crystal_cluster"]
+	return true
 
 func set_pending_item(item: Dictionary) -> void:
 	pending_item = item.duplicate(true)
@@ -326,9 +325,8 @@ func set_notice(value: String) -> void:
 
 func _price_text(item: Dictionary) -> String:
 	if not _item_known(item):
-		return "估价 ? · 未鉴定"
-	var price := roundi(float(item.get("base_value", 0)) * (100 - int(item.get("wear", 0))) / 100.0)
-	return "估价 %d" % price
+		return "估价 ?"
+	return "估价 %d" % int(item.get("base_value", 0))
 
 func _on_cell_clicked(cell: Vector2i) -> void:
 	var clicked: Dictionary = inventory.item_at(cell)

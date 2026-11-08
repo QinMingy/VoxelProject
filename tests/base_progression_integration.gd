@@ -149,7 +149,7 @@ func run() -> void:
 	check(not game.detector_reading.echoes.is_empty() and game.detector_reading.depth_text == "" and game.detector_reading.size_text == "", "level zero detects multiple directions but withholds depth and size")
 	for forbidden in ["price", "value", "base_value", "wear", "sale_value"]:
 		check(not game.detector_reading.has(forbidden), "detector has no exact price field " + forbidden)
-	check(not game.appraisal.known, "starting catalogue leaves exact value unknown")
+	check(game.appraisal.is_known(), "item prices are known without a separate identification step")
 	game.settle(false)
 	check(game.base_open and paused and game.bank == 0 and game.outpost_page == "lobby", "return opens paused lobby")
 	game.progression.credit(6000)
@@ -210,26 +210,27 @@ func run() -> void:
 	check(game.gm_open and not game.inventory_open, "GM blocks inventory stacking")
 	key(KEY_G)
 	check(not game.gm_open and not paused, "closing GM resumes gameplay")
-	var expected_sale := roundi(float(first.base_value) * (100 - first.wear_percent) / 100.0)
 	game.oxygen = 42.0
 	check(game.gain_oxygen(17) > 0.0 and game.oxygen_grains == 17, "oxygen collected on a paid trip")
 	game.settle(false)
+	if game.settlement_panel.is_open:
+		game.settlement_panel.close()
 	check(game.bank == expedition_balance and game.base_open and paused and game.outpost_page == "lobby", "safe extraction returns to the exhibition lobby and preserves cargo instead of auto-selling")
 	click("MuseumButton")
-	check(game.outpost_page == "museum" and game.museum_panel._tab == "warehouse", "warehouse action opens stored cargo from the returned lobby")
-	check(game.progression.museum_state.warehouse.size() == 1 and game.progression.museum_state.warehouse[0].wear == first.wear_percent, "safe cargo preserves its own wear in the persistent warehouse")
-	check(game.progression.last_report.income == 0 and game.progression.last_report.fee == 60 and game.progression.last_report.net == -60 and game.progression.last_report.cargo_count == 1, "expedition report separates cash income from newly stored cargo")
-	var stored_uid := int(game.progression.museum_state.warehouse[0].uid)
-	game.on_museum_sell(stored_uid)
-	check(game.bank == expedition_balance + expected_sale and game.progression.museum_state.warehouse.is_empty(), "explicit sale alone credits the specimen's own wear-adjusted value")
+	check(game.outpost_page == "museum" and game.museum_panel.is_open, "warehouse action opens the merged collection drawer from the returned lobby")
+	var archived := 0
+	for key: String in game.progression.museum_state.items:
+		archived += int(game.progression.museum_state.items[key].copies)
+	check(game.progression.museum_state.items.size() == 1 and archived == 1,
+		"safe cargo is archived into the collection on return")
+	check(game.progression.last_report.income == 0 and game.progression.last_report.fee == 60 and game.progression.last_report.net == -60 and game.progression.last_report.cargo_count == 1, "expedition report separates cash income from newly archived cargo")
 	game.museum_panel.close()
 	check(game.outpost_page == "lobby" and paused, "closing museum returns to the paused lobby")
 	click("ReportButton")
-	check(game.outpost_page == "report" and paused and game.outpost_panel.is_open, "last report has a separate paused page")
-	check(str(game.outpost_panel._state.receipt) == str(game.progression.last_report.text), "report page receives the real expedition settlement")
-	await shot("report")
-	game.outpost_panel.close()
-	check(game.outpost_page == "lobby" and paused, "closing report returns to lobby")
+	check(game.settlement_panel.is_open and paused, "harvest log opens the detailed settlement view")
+	await shot("settlement")
+	game.settlement_panel.close()
+	check(game.outpost_page == "lobby" and paused, "closing the settlement returns to lobby")
 	var paid_balance: int = game.bank
 	game.settle(false)
 	check(game.bank == paid_balance, "duplicate settlement cannot credit again")
